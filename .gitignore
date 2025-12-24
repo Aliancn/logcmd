@@ -1,0 +1,38 @@
+# 二进制文件
+bin/
+
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 测试文件
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# 日志文件
+logs/
+*.log
+
+# Go 相关
+vendor/
+go.work
+go.work.sum
+
+# IDE 相关
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+.claude
+.codex
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+.logcmd

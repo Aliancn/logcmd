@@ -2,6 +2,11 @@
 
 一个使用 Go 编写的高效命令行工具，用于执行命令并自动记录日志，支持日志搜索和统计分析。
 
+## 核心概念
+
+- **Project（项目）**: 一个 `.logcmd` 目录及其管理的所有日志
+- **Run（运行）**: 一次命令执行及其产生的日志
+
 ## 特性
 
 - **智能日志目录**: 类似 Git 的工作方式，自动查找或创建 `.logcmd` 目录
@@ -9,12 +14,20 @@
   - 向上查找父目录中的 `.logcmd`
   - 都没找到则在当前目录创建 `.logcmd`
   - 支持手动指定任意目录
+- **自动项目注册**: 创建 `.logcmd` 时自动注册到全局数据库
+  - 在 home 目录下创建 `~/.logcmd_registry.db` 数据库
+  - 每个项目对应唯一编号，支持编号或路径操作
+  - 无需手动注册，首次执行命令即自动注册
+- **集中状态管理**: 使用 SQLite 管理所有项目
+  - 支持跨项目搜索和统计
+  - 自动清理无效项目（在搜索和统计时）
+  - 懒更新检查机制
 - **高性能日志记录**: 使用流式处理和缓冲 I/O，支持大输出量命令
 - **实时输出**: 命令输出实时显示在终端，同时保存到日志文件
 - **智能组织**: 日志文件按日期自动分文件夹存储 (`.logcmd/2024-01-15/log_20240115_143052.log`)
 - **丰富元数据**: 记录命令、参数、执行时间、时长、退出码等信息
-- **强大搜索**: 支持关键词搜索、正则表达式、日期范围筛选、上下文显示
-- **统计分析**: 提供命令执行次数、成功率、耗时、每日统计等多维度分析
+- **强大搜索**: 支持关键词搜索、正则表达式、日期范围筛选、上下文显示、跨项目搜索
+- **统计分析**: 提供命令执行次数、成功率、耗时、每日统计等多维度分析、支持跨项目统计
 - **跨平台**: 支持 Linux、macOS、Windows
 
 ## 安装
@@ -99,19 +112,19 @@ logcmd python train.py --epochs 100
 
 ```bash
 # 搜索包含 "error" 的日志
-logcmd -search -keyword "error"
+logcmd search -keyword "error"
 
 # 使用正则表达式搜索
-logcmd -search -keyword "error|fail|panic" -regex
+logcmd search -keyword "error|fail|panic" -regex
 
 # 显示上下文（前后各3行）
-logcmd -search -keyword "timeout" -context 3
+logcmd search -keyword "timeout" -context 3
 
 # 按日期范围搜索
-logcmd -search -keyword "error" -start 2024-01-01 -end 2024-01-31
+logcmd search -keyword "error" -start 2024-01-01 -end 2024-01-31
 
 # 区分大小写搜索
-logcmd -search -keyword "Error" -case
+logcmd search -keyword "Error" -case
 ```
 
 ### 3. 统计分析
@@ -122,6 +135,9 @@ logcmd -stats
 
 # 分析指定目录的日志
 logcmd -stats -dir ./mylogs
+
+# 分析所有已注册目录的日志
+logcmd -stats -all
 ```
 
 统计报告包括：
@@ -130,6 +146,85 @@ logcmd -stats -dir ./mylogs
 - 命令使用频率 Top 10
 - 退出码分布
 - 每日统计
+
+### 4. 项目管理
+
+项目（Project）是 LogCmd 的核心概念，代表一个 `.logcmd` 目录及其管理的所有日志。
+
+#### 自动注册
+
+首次在目录中执行命令时，会自动创建 `.logcmd` 目录并注册到全局数据库：
+
+```bash
+# 首次执行，自动创建并注册项目
+logcmd npm test
+# 输出: 正在记录日志到: .logcmd/2024-01-15/log_20240115_143052.log
+```
+
+#### 列出所有项目
+
+```bash
+logcmd project list
+```
+
+输出示例：
+```
+已注册的项目 (共3个):
+
+ID    路径                                                 最后检查时间
+--------------------------------------------------------------------------------
+1     /Users/user/project1/.logcmd                       2024-01-15 14:30:52  ✓
+2     /Users/user/project2/.logcmd                       2024-01-15 15:20:15  ✓
+3     /home/user/workspace/.logcmd                       2024-01-15 16:10:30  ✗
+```
+
+说明：
+- `✓` 表示项目目录存在
+- `✗` 表示项目目录已被删除
+
+#### 清理无效项目
+
+删除不存在的项目记录：
+
+```bash
+logcmd project clean
+```
+
+#### 删除项目
+
+```bash
+# 通过ID删除
+logcmd project delete 1
+
+# 通过路径删除
+logcmd project delete /path/to/.logcmd
+```
+
+注意：删除项目仅删除数据库记录，不会删除实际的日志文件。
+
+#### 跨项目搜索
+
+搜索所有已注册项目中的日志：
+
+```bash
+# 在所有项目中搜索
+logcmd search -keyword "error" -all
+
+# 使用正则表达式搜索所有项目
+logcmd search -keyword "error|fail" -regex -all
+```
+
+跨项目搜索会自动清理不存在的项目。
+
+#### 跨项目统计
+
+统计所有已注册项目的日志：
+
+```bash
+logcmd stats -all
+```
+
+跨项目统计会自动清理不存在的项目。
 
 ## 使用示例
 
@@ -149,7 +244,7 @@ Build successful!
 ### 示例 2: 搜索错误日志
 
 ```bash
-logcmd -search -keyword "error" -regex -context 2
+logcmd search -keyword "error" -regex -context 2
 ```
 
 输出：
@@ -167,10 +262,40 @@ logcmd -search -keyword "error" -regex -context 2
 ...
 ```
 
-### 示例 3: 查看统计报告
+### 示例 3: 项目管理工作流
 
 ```bash
-logcmd -stats
+# 场景1：在新项目中首次使用（自动注册）
+cd ~/my-project
+logcmd npm test
+# 输出: 正在记录日志到: .logcmd/2024-01-15/log_20240115_143052.log
+# 项目自动注册到全局数据库
+
+# 场景2：查看所有已注册项目
+logcmd project list
+# 输出:
+# 已注册的项目 (共2个):
+# ID    路径                                    最后检查时间
+# 1     /Users/user/my-project/.logcmd        2024-01-15 14:30:52  ✓
+# 2     /Users/user/old-project/.logcmd       2024-01-10 10:20:15  ✗
+
+# 场景3：清理已删除的项目
+logcmd project clean
+# 自动删除 old-project 的记录
+
+# 场景4：跨所有项目搜索错误
+logcmd search -keyword "error|fail" -regex -all
+# 在所有项目中搜索，自动跳过已删除的项目
+
+# 场景5：查看所有项目的统计
+logcmd stats -all
+# 显示每个项目的统计报告
+```
+
+### 示例 4: 统计报告
+
+```bash
+logcmd stats
 ```
 
 输出：
@@ -212,22 +337,41 @@ logcmd -stats
 ### 全局选项
 - `-dir string`: 日志目录路径（默认：自动查找或创建 `.logcmd`）
 - `-version`: 显示版本信息
-- `-help`: 显示帮助信息
+- `help`, `-help`: 显示帮助信息
 
-### 执行模式
-- `-run`: 明确指定执行模式（默认行为，可省略）
+### 搜索命令
+```bash
+logcmd search [选项]
+```
 
-### 搜索模式
-- `-search`: 启用搜索模式
+选项：
 - `-keyword string`: 搜索关键词（必需）
 - `-regex`: 使用正则表达式
 - `-case`: 区分大小写
 - `-context int`: 显示上下文行数
 - `-start string`: 开始日期 (YYYY-MM-DD)
 - `-end string`: 结束日期 (YYYY-MM-DD)
+- `-dir string`: 日志目录路径
+- `-all`: 搜索所有已注册项目
 
-### 统计模式
-- `-stats`: 启用统计分析模式
+### 统计命令
+```bash
+logcmd stats [选项]
+```
+
+选项：
+- `-dir string`: 日志目录路径
+- `-all`: 统计所有已注册项目
+
+### 项目管理命令
+```bash
+logcmd project <command>
+```
+
+命令：
+- `list`: 列出所有已注册的项目
+- `clean`: 清理不存在的项目
+- `delete <id|path>`: 删除指定的项目（支持ID或路径）
 
 ## 日志文件格式
 
@@ -273,6 +417,8 @@ logcmd/
 │   │   └── executor.go       # 命令执行器
 │   ├── logger/
 │   │   └── logger.go         # 日志记录核心
+│   ├── registry/
+│   │   └── registry.go       # Registry集中状态管理
 │   ├── search/
 │   │   └── search.go         # 日志搜索
 │   └── stats/
@@ -293,6 +439,7 @@ logcmd/
 ## 技术栈
 
 - **语言**: Go 1.21+
+- **数据库**: SQLite3 (github.com/mattn/go-sqlite3)
 - **时区**: 默认使用东八区（Asia/Shanghai）
 - **并发**: 使用 goroutine 和 WaitGroup
 - **I/O**: bufio 缓冲、io.MultiWriter 多路输出

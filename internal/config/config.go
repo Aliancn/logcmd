@@ -89,6 +89,11 @@ func isSubDir(dir, parent string) bool {
 func (c *Config) GetLogFilePath() (string, error) {
 	now := time.Now().In(c.TimeZone)
 
+	// 确保LogDir存在
+	if err := os.MkdirAll(c.LogDir, 0755); err != nil {
+		return "", err
+	}
+
 	// 按日期创建子目录 logs/2024-01-15/
 	dateDir := filepath.Join(c.LogDir, now.Format("2006-01-02"))
 	if err := os.MkdirAll(dateDir, 0755); err != nil {

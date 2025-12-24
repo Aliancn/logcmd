@@ -9,6 +9,7 @@ import (
 
 	"github.com/aliancn/logcmd/internal/config"
 	"github.com/aliancn/logcmd/internal/executor"
+	"github.com/aliancn/logcmd/internal/registry"
 )
 
 // Logger 日志记录器
@@ -36,6 +37,9 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) error 
 	if err != nil {
 		return fmt.Errorf("生成日志路径失败: %w", err)
 	}
+
+	// 自动注册项目（如果尚未注册）
+	registerProject(l.config.LogDir)
 
 	// 打开日志文件
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -77,6 +81,19 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) error 
 	}
 
 	return nil
+}
+
+// registerProject 自动注册项目到全局数据库
+func registerProject(logDir string) {
+	// 静默注册，失败不影响主流程
+	reg, err := registry.New()
+	if err != nil {
+		return
+	}
+	defer reg.Close()
+
+	// 尝试注册，如果已存在会自动更新时间
+	reg.Register(logDir)
 }
 
 // writeHeader 写入日志头部信息

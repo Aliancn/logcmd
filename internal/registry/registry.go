@@ -51,7 +51,15 @@ func getDBPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".logcmd_registry.db"), nil
+
+	// 创建统一的配置目录
+	logcmdDir := filepath.Join(home, ".logcmd")
+	dataDir := filepath.Join(logcmdDir, "data")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return "", fmt.Errorf("创建数据目录失败: %w", err)
+	}
+
+	return filepath.Join(dataDir, "registry.db"), nil
 }
 
 // initDB 初始化数据库表

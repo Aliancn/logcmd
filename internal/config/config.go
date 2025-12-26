@@ -5,14 +5,18 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aliancn/logcmd/internal/template"
 )
 
 // Config 定义日志配置
 type Config struct {
-	LogDir       string        // 日志根目录
+	LogDir       string         // 日志根目录
 	TimeZone     *time.Location // 时区（默认东八区）
-	BufferSize   int           // 缓冲区大小
-	AutoCompress bool          // 是否自动压缩
+	BufferSize   int            // 缓冲区大小
+	AutoCompress bool           // 是否自动压缩
+	Command      string         // 当前执行的命令
+	CommandArgs  []string       // 命令参数
 }
 
 // DefaultConfig 返回默认配置
@@ -100,7 +104,18 @@ func (c *Config) GetLogFilePath() (string, error) {
 		return "", err
 	}
 
-	// 日志文件名 log_20240115_143052.log
-	filename := now.Format("log_20060102_150405.log")
+	// 加载命名模板
+	tmpl, err := template.Load()
+	if err != nil {
+		// 如果加载失败，使用默认命名
+		tmpl = template.DefaultTemplate()
+	}
+
+	// 获取项目名称
+	projectName := template.GetProjectName(c.LogDir)
+
+	// 使用模板生成文件名
+	filename := tmpl.GenerateLogName(c.Command, c.CommandArgs, projectName, c.TimeZone)
+
 	return filepath.Join(dateDir, filename), nil
 }

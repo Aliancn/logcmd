@@ -32,6 +32,10 @@ func New(cfg *config.Config) (*Logger, error) {
 
 // Run 执行命令并记录日志
 func (l *Logger) Run(ctx context.Context, command string, args ...string) error {
+	// 设置命令信息（用于生成日志文件名）
+	l.config.Command = command
+	l.config.CommandArgs = args
+
 	// 生成日志文件路径
 	logPath, err := l.config.GetLogFilePath()
 	if err != nil {

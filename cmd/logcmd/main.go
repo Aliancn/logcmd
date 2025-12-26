@@ -12,6 +12,7 @@ import (
 	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/search"
 	"github.com/aliancn/logcmd/internal/stats"
+	"github.com/aliancn/logcmd/internal/template"
 )
 
 const version = "1.0.0"
@@ -75,6 +76,15 @@ func main() {
 			os.Exit(1)
 		}
 		manageProject(os.Args[2], os.Args[3:])
+		return
+
+	case "template":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "错误: 请指定template子命令")
+			fmt.Fprintln(os.Stderr, "用法: logcmd template <logname>")
+			os.Exit(1)
+		}
+		manageTemplate(os.Args[2])
 		return
 
 	default:
@@ -406,6 +416,22 @@ func manageProject(cmd string, args []string) {
 	}
 }
 
+func manageTemplate(cmd string) {
+	switch cmd {
+	case "logname":
+		// 配置日志命名模板
+		if err := template.ConfigureInteractive(); err != nil {
+			fmt.Fprintf(os.Stderr, "配置模板失败: %v\n", err)
+			os.Exit(1)
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "错误: 未知的template命令: %s\n", cmd)
+		fmt.Fprintln(os.Stderr, "支持的命令: logname")
+		os.Exit(1)
+	}
+}
+
 func printHelp() {
 	fmt.Printf(`logcmd - 高性能命令日志记录工具 v%s
 
@@ -414,6 +440,7 @@ func printHelp() {
   logcmd search [选项]                  搜索日志
   logcmd stats [选项]                   统计分析
   logcmd project <command>              管理项目
+  logcmd template <command>             配置模板
 
 执行命令:
   logcmd ls -la                         # 执行ls命令并记录日志
@@ -464,12 +491,16 @@ func printHelp() {
   clean             清理不存在的项目
   delete <id|path>  删除指定的项目（支持ID或路径）
 
+模板配置命令:
+  logname           交互式配置日志文件命名模板
+
 特性:
   ✓ 智能日志目录查找（类似 Git，向上查找或创建 .logcmd）
   ✓ 自动项目注册（创建.logcmd时自动注册到全局数据库）
   ✓ 集中状态管理（使用SQLite管理所有项目）
   ✓ 跨项目搜索和统计（-all 参数）
   ✓ 自动清理无效项目（在搜索和统计时自动清理）
+  ✓ 自定义日志命名模板（支持命令、时间、项目名、自定义文本）
   ✓ 自动按日期组织日志文件 (.logcmd/2024-01-15/log_20240115_143052.log)
   ✓ 实时显示命令输出并同步记录
   ✓ 记录命令执行时间、退出码等元数据

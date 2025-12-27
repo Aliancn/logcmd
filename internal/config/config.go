@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/aliancn/logcmd/internal/template"
@@ -49,14 +48,27 @@ func findLogDir() string {
 	// 标准化路径
 	cwd = filepath.Clean(cwd)
 
+	// 记录全局目录（$HOME/.logcmd），仅当用户直接在 home 下使用时才使用
+	var homeDir, homeLogcmd string
+	if home, err := os.UserHomeDir(); err == nil {
+		homeDir = filepath.Clean(home)
+		homeLogcmd = filepath.Join(homeDir, ".logcmd")
+	}
+
 	// 从当前目录开始向上查找 .logcmd
 	currentDir := cwd
 	for {
 		// 检查当前目录是否存在 .logcmd
 		logcmdPath := filepath.Join(currentDir, ".logcmd")
 		if info, err := os.Stat(logcmdPath); err == nil && info.IsDir() {
-			// 找到了 .logcmd 目录
-			return logcmdPath
+			// 只有当命令在 home 目录直接执行时才使用全局 .logcmd
+			if homeLogcmd != "" && filepath.Clean(logcmdPath) == homeLogcmd {
+				if homeDir != "" && filepath.Clean(cwd) == homeDir {
+					return logcmdPath
+				}
+			} else {
+				return logcmdPath
+			}
 		}
 
 		// 获取父目录
@@ -70,23 +82,13 @@ func findLogDir() string {
 		currentDir = parentDir
 	}
 
+	// 没有找到 .logcmd，如果当前目录是 home，则返回全局目录
+	if homeDir != "" && filepath.Clean(cwd) == homeDir && homeLogcmd != "" {
+		return homeLogcmd
+	}
+
 	// 没有找到 .logcmd，在当前工作目录创建
 	return filepath.Join(cwd, ".logcmd")
-}
-
-// isSubDir 检查 dir 是否是 parent 的子目录
-func isSubDir(dir, parent string) bool {
-	// 确保路径以分隔符结尾，避免误匹配
-	// 例如 /home/user2 不应该匹配 /home/user
-	if !strings.HasSuffix(parent, string(filepath.Separator)) {
-		parent += string(filepath.Separator)
-	}
-	if !strings.HasSuffix(dir, string(filepath.Separator)) {
-		dir += string(filepath.Separator)
-	}
-
-	// 检查 dir 是否以 parent 开头
-	return strings.HasPrefix(dir, parent)
 }
 
 // GetLogFilePath 生成日志文件路径，按日期组织目录

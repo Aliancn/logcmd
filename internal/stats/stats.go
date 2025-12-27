@@ -3,21 +3,50 @@ package stats
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
 
+const (
+	maxHeaderScanLines = 32
+	logFooterReadSize  = 16 * 1024
+)
+
+var (
+	cmdRegex      = regexp.MustCompile(`^命令:\s*(.+)$`)
+	exitCodeRegex = regexp.MustCompile(`^退出码:\s*(\d+)$`)
+	statusRegex   = regexp.MustCompile(`^执行状态:\s*(\S+)$`)
+	durationRegex = regexp.MustCompile(`^执行时长:\s*(.+)$`)
+	dateRegex     = regexp.MustCompile(`^# 时间:\s*(.+)$`)
+)
+
+// SourceType 标识统计数据来源
+type SourceType string
+
+const (
+	SourceLogFiles SourceType = "logs"
+	SourceDatabase SourceType = "database"
+)
+
 // Stats 统计数据
 type Stats struct {
-	TotalCommands   int                // 总命令数
-	SuccessCommands int                // 成功命令数
-	FailedCommands  int                // 失败命令数
-	TotalDuration   time.Duration      // 总执行时长
-	CommandCounts   map[string]int     // 各命令执行次数
-	ExitCodes       map[int]int        // 退出码分布
+	ProjectName     string               // 项目名称
+	RangeLabel      string               // 统计范围
+	Source          SourceType           // 数据来源
+	TotalCommands   int                  // 总命令数
+	SuccessCommands int                  // 成功命令数
+	FailedCommands  int                  // 失败命令数
+	TotalDuration   time.Duration        // 总执行时长
+	AvgDuration     time.Duration        // 平均执行时长
+	MaxDuration     time.Duration        // 最长执行时长
+	MinDuration     time.Duration        // 最短执行时长
+	CommandCounts   map[string]int       // 各命令执行次数
+	ExitCodes       map[int]int          // 退出码分布
 	DailyStats      map[string]*DayStats // 每日统计
 }
 
@@ -50,6 +79,7 @@ func New(logDir string) *Analyzer {
 	return &Analyzer{
 		logDir: logDir,
 		stats: &Stats{
+			Source:        SourceLogFiles,
 			CommandCounts: make(map[string]int),
 			ExitCodes:     make(map[int]int),
 			DailyStats:    make(map[string]*DayStats),
@@ -84,6 +114,13 @@ func (a *Analyzer) Analyze() (*Stats, error) {
 		return nil, fmt.Errorf("遍历日志目录失败: %w", err)
 	}
 
+	if a.stats.TotalCommands > 0 {
+		a.stats.AvgDuration = a.stats.TotalDuration / time.Duration(a.stats.TotalCommands)
+		if a.stats.MinDuration == 0 {
+			a.stats.MinDuration = a.stats.MaxDuration
+		}
+	}
+
 	return a.stats, nil
 }
 
@@ -96,60 +133,99 @@ func (a *Analyzer) analyzeFile(filePath string) error {
 	defer file.Close()
 
 	metadata := &LogMetadata{}
-	scanner := bufio.NewScanner(file)
 
-	// 正则表达式匹配元数据
-	cmdRegex := regexp.MustCompile(`^命令:\s*(.+)$`)
-	exitCodeRegex := regexp.MustCompile(`^退出码:\s*(\d+)$`)
-	statusRegex := regexp.MustCompile(`^执行状态:\s*(\S+)$`)
-	durationRegex := regexp.MustCompile(`^执行时长:\s*(.+)$`)
-	dateRegex := regexp.MustCompile(`^# 时间:\s*(.+)$`)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// 解析命令
-		if matches := cmdRegex.FindStringSubmatch(line); matches != nil {
-			parts := strings.Fields(matches[1])
-			if len(parts) > 0 {
-				metadata.Command = parts[0]
-			}
-		}
-
-		// 解析退出码
-		if matches := exitCodeRegex.FindStringSubmatch(line); matches != nil {
-			fmt.Sscanf(matches[1], "%d", &metadata.ExitCode)
-		}
-
-		// 解析执行状态
-		if matches := statusRegex.FindStringSubmatch(line); matches != nil {
-			metadata.Success = matches[1] == "成功"
-		}
-
-		// 解析执行时长
-		if matches := durationRegex.FindStringSubmatch(line); matches != nil {
-			duration, _ := time.ParseDuration(strings.ReplaceAll(matches[1], " ", ""))
-			metadata.Duration = duration
-		}
-
-		// 解析日期
-		if matches := dateRegex.FindStringSubmatch(line); matches != nil {
-			if t, err := time.Parse("2006-01-02 15:04:05", matches[1]); err == nil {
-				metadata.Date = t.Format("2006-01-02")
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
+	if err := parseLogHeader(file, metadata); err != nil {
 		return err
 	}
 
-	// 更新统计数据
-	if metadata.Command != "" {
-		a.updateStats(metadata)
+	if err := parseLogFooter(file, metadata); err != nil {
+		return err
 	}
 
+	if metadata.Command == "" {
+		fmt.Fprintf(os.Stderr, "跳过缺少元数据的日志: %s\n", filePath)
+		return nil
+	}
+
+	if metadata.Date == "" {
+		fmt.Fprintf(os.Stderr, "警告: 日志缺少时间信息，仅统计命令: %s\n", filePath)
+	}
+
+	a.updateStats(metadata)
 	return nil
+}
+
+func parseLogHeader(file *os.File, meta *LogMetadata) error {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(file)
+	lines := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		lines++
+		if matches := dateRegex.FindStringSubmatch(line); matches != nil {
+			if t, err := time.Parse("2006-01-02 15:04:05", matches[1]); err == nil {
+				meta.Date = t.Format("2006-01-02")
+			}
+			break
+		}
+		if lines >= maxHeaderScanLines {
+			break
+		}
+	}
+
+	return scanner.Err()
+}
+
+func parseLogFooter(file *os.File, meta *LogMetadata) error {
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+
+	size := info.Size()
+	if size == 0 {
+		return nil
+	}
+
+	readSize := logFooterReadSize
+	if int64(readSize) > size {
+		readSize = int(size)
+	}
+	start := size - int64(readSize)
+	buf := make([]byte, readSize)
+	if _, err := file.ReadAt(buf, start); err != nil && err != io.EOF {
+		return err
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(buf)))
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if matches := cmdRegex.FindStringSubmatch(line); matches != nil {
+			parts := strings.Fields(matches[1])
+			if len(parts) > 0 {
+				meta.Command = parts[0]
+			}
+		}
+
+		if matches := exitCodeRegex.FindStringSubmatch(line); matches != nil {
+			fmt.Sscanf(matches[1], "%d", &meta.ExitCode)
+		}
+
+		if matches := statusRegex.FindStringSubmatch(line); matches != nil {
+			meta.Success = matches[1] == "成功"
+		}
+
+		if matches := durationRegex.FindStringSubmatch(line); matches != nil {
+			duration, _ := time.ParseDuration(strings.ReplaceAll(matches[1], " ", ""))
+			meta.Duration = duration
+		}
+	}
+
+	return scanner.Err()
 }
 
 // updateStats 更新统计数据
@@ -163,6 +239,12 @@ func (a *Analyzer) updateStats(meta *LogMetadata) {
 	}
 
 	a.stats.TotalDuration += meta.Duration
+	if meta.Duration > a.stats.MaxDuration {
+		a.stats.MaxDuration = meta.Duration
+	}
+	if meta.Duration > 0 && (a.stats.MinDuration == 0 || meta.Duration < a.stats.MinDuration) {
+		a.stats.MinDuration = meta.Duration
+	}
 	a.stats.CommandCounts[meta.Command]++
 	a.stats.ExitCodes[meta.ExitCode]++
 
@@ -186,20 +268,41 @@ func (a *Analyzer) updateStats(meta *LogMetadata) {
 // PrintStats 打印统计结果
 func PrintStats(stats *Stats) {
 	fmt.Println(strings.Repeat("=", 60))
-	fmt.Println("日志统计分析报告")
+	if stats.ProjectName != "" {
+		fmt.Printf("%s 的日志统计分析\n", stats.ProjectName)
+	} else {
+		fmt.Println("日志统计分析报告")
+	}
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println()
 
+	if stats.RangeLabel != "" {
+		fmt.Printf("统计范围: %s\n", stats.RangeLabel)
+	}
+	if stats.Source != "" {
+		fmt.Printf("数据来源: %s\n", sourceLabel(stats.Source))
+	}
+	if stats.RangeLabel != "" || stats.Source != "" {
+		fmt.Println()
+	}
+
 	// 总体统计
 	fmt.Printf("总命令数: %d\n", stats.TotalCommands)
-	fmt.Printf("成功: %d (%.1f%%)\n", stats.SuccessCommands,
-		float64(stats.SuccessCommands)/float64(stats.TotalCommands)*100)
-	fmt.Printf("失败: %d (%.1f%%)\n", stats.FailedCommands,
-		float64(stats.FailedCommands)/float64(stats.TotalCommands)*100)
-	fmt.Printf("总执行时长: %v\n", stats.TotalDuration)
+	successRate := 0.0
 	if stats.TotalCommands > 0 {
-		avgDuration := stats.TotalDuration / time.Duration(stats.TotalCommands)
-		fmt.Printf("平均执行时长: %v\n", avgDuration)
+		successRate = float64(stats.SuccessCommands) / float64(stats.TotalCommands) * 100
+	}
+	fmt.Printf("成功: %d (%.1f%%)\n", stats.SuccessCommands, successRate)
+	fmt.Printf("失败: %d (%.1f%%)\n", stats.FailedCommands, 100-successRate)
+	fmt.Printf("总执行时长: %v\n", stats.TotalDuration)
+	if stats.AvgDuration > 0 {
+		fmt.Printf("平均执行时长: %v\n", stats.AvgDuration)
+	}
+	if stats.MaxDuration > 0 {
+		fmt.Printf("最长执行时长: %v\n", stats.MaxDuration)
+	}
+	if stats.MinDuration > 0 && stats.MinDuration != stats.MaxDuration {
+		fmt.Printf("最短执行时长: %v\n", stats.MinDuration)
 	}
 	fmt.Println()
 
@@ -208,7 +311,6 @@ func PrintStats(stats *Stats) {
 		fmt.Println("命令使用频率 (Top 10):")
 		fmt.Println(strings.Repeat("-", 40))
 
-		// 简单排序找出top 10
 		type cmdCount struct {
 			cmd   string
 			count int
@@ -218,14 +320,12 @@ func PrintStats(stats *Stats) {
 			cmdList = append(cmdList, cmdCount{cmd, count})
 		}
 
-		// 冒泡排序（简单实现）
-		for i := 0; i < len(cmdList); i++ {
-			for j := i + 1; j < len(cmdList); j++ {
-				if cmdList[j].count > cmdList[i].count {
-					cmdList[i], cmdList[j] = cmdList[j], cmdList[i]
-				}
+		sort.Slice(cmdList, func(i, j int) bool {
+			if cmdList[i].count == cmdList[j].count {
+				return cmdList[i].cmd < cmdList[j].cmd
 			}
-		}
+			return cmdList[i].count > cmdList[j].count
+		})
 
 		limit := 10
 		if len(cmdList) < limit {
@@ -242,8 +342,13 @@ func PrintStats(stats *Stats) {
 	if len(stats.ExitCodes) > 0 {
 		fmt.Println("退出码分布:")
 		fmt.Println(strings.Repeat("-", 40))
-		for code, count := range stats.ExitCodes {
-			fmt.Printf("  退出码 %d: %d 次\n", code, count)
+		var codes []int
+		for code := range stats.ExitCodes {
+			codes = append(codes, code)
+		}
+		sort.Ints(codes)
+		for _, code := range codes {
+			fmt.Printf("  退出码 %d: %d 次\n", code, stats.ExitCodes[code])
 		}
 		fmt.Println()
 	}
@@ -260,4 +365,15 @@ func PrintStats(stats *Stats) {
 
 	fmt.Println()
 	fmt.Println(strings.Repeat("=", 60))
+}
+
+func sourceLabel(source SourceType) string {
+	switch source {
+	case SourceDatabase:
+		return "database"
+	case SourceLogFiles:
+		return "logs"
+	default:
+		return string(source)
+	}
 }

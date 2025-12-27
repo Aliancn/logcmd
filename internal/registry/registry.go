@@ -5,26 +5,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/aliancn/logcmd/internal/migration"
+	"github.com/aliancn/logcmd/internal/model"
 )
 
-// LogcmdEntry 表示一个已注册的.logcmd目录
-type LogcmdEntry struct {
-	ID          int       // 编号
-	Path        string    // .logcmd目录路径
-	CreatedAt   time.Time // 创建时间
-	UpdatedAt   time.Time // 最后更新时间
-	LastChecked time.Time // 最后检查时间
-}
-
-// Registry 管理所有.logcmd目录的注册信息
+// Registry 管理所有项目的注册信息，并负责数据库迁移
 type Registry struct {
 	db *sql.DB
 }
 
-// New 创建一个新的Registry实例
+// New 创建一个带自动迁移的Registry实例
 func New() (*Registry, error) {
 	dbPath, err := getDBPath()
 	if err != nil {
@@ -37,9 +33,12 @@ func New() (*Registry, error) {
 	}
 
 	r := &Registry{db: db}
-	if err := r.initDB(); err != nil {
+
+	// 执行数据库迁移
+	migrator := migration.NewMigration(db)
+	if err := migrator.Migrate(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("初始化数据库失败: %w", err)
+		return nil, fmt.Errorf("数据库迁移失败: %w", err)
 	}
 
 	return r, nil
@@ -52,7 +51,6 @@ func getDBPath() (string, error) {
 		return "", err
 	}
 
-	// 创建统一的配置目录
 	logcmdDir := filepath.Join(home, ".logcmd")
 	dataDir := filepath.Join(logcmdDir, "data")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
@@ -62,91 +60,145 @@ func getDBPath() (string, error) {
 	return filepath.Join(dataDir, "registry.db"), nil
 }
 
-// initDB 初始化数据库表
-func (r *Registry) initDB() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS logcmd_entries (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		path TEXT NOT NULL UNIQUE,
-		created_at TIMESTAMP NOT NULL,
-		updated_at TIMESTAMP NOT NULL,
-		last_checked TIMESTAMP NOT NULL
-	);
-	CREATE INDEX IF NOT EXISTS idx_path ON logcmd_entries(path);
-	`
-
-	_, err := r.db.Exec(schema)
-	return err
-}
-
-// Register 注册一个.logcmd目录
-func (r *Registry) Register(path string) error {
+// Register 注册一个项目
+func (r *Registry) Register(path string) (*model.Project, error) {
 	// 规范化路径
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return fmt.Errorf("获取绝对路径失败: %w", err)
+		return nil, fmt.Errorf("获取绝对路径失败: %w", err)
 	}
 
 	// 检查目录是否存在
 	info, err := os.Stat(absPath)
 	if err != nil {
-		return fmt.Errorf("目录不存在: %w", err)
+		return nil, fmt.Errorf("目录不存在: %w", err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("路径不是目录: %s", absPath)
+		return nil, fmt.Errorf("路径不是目录: %s", absPath)
 	}
+
+	// 从路径提取项目名称
+	projectName := extractProjectName(absPath)
 
 	now := time.Now()
 	query := `
-		INSERT INTO logcmd_entries (path, created_at, updated_at, last_checked)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO projects (path, name, created_at, updated_at, last_checked)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
 			updated_at = ?,
 			last_checked = ?
+		RETURNING id, path, name, description, category, tags,
+				  total_commands, success_commands, failed_commands, total_duration_ms,
+				  last_command, last_command_status, last_command_time,
+				  created_at, updated_at, last_checked,
+				  template_config, custom_config
 	`
 
-	_, err = r.db.Exec(query, absPath, now, now, now, now, now)
+	var project model.Project
+	err = r.db.QueryRow(query, absPath, projectName, now, now, now, now, now).Scan(
+		&project.ID,
+		&project.Path,
+		&project.Name,
+		&project.Description,
+		&project.Category,
+		&project.TagsJSON,
+		&project.TotalCommands,
+		&project.SuccessCommands,
+		&project.FailedCommands,
+		&project.TotalDurationMs,
+		&project.LastCommand,
+		&project.LastCommandStatus,
+		&project.LastCommandTime,
+		&project.CreatedAt,
+		&project.UpdatedAt,
+		&project.LastChecked,
+		&project.TemplateJSON,
+		&project.CustomJSON,
+	)
+
 	if err != nil {
-		return fmt.Errorf("注册目录失败: %w", err)
+		return nil, fmt.Errorf("注册项目失败: %w", err)
 	}
 
-	return nil
+	if err := project.AfterLoad(); err != nil {
+		return nil, fmt.Errorf("加载项目数据失败: %w", err)
+	}
+
+	return &project, nil
 }
 
-// List 列出所有已注册的.logcmd目录
-func (r *Registry) List() ([]LogcmdEntry, error) {
-	query := `SELECT id, path, created_at, updated_at, last_checked FROM logcmd_entries ORDER BY id`
+// List 列出所有已注册的项目
+func (r *Registry) List() ([]*model.Project, error) {
+	query := `
+		SELECT id, path, name, description, category, tags,
+			   total_commands, success_commands, failed_commands, total_duration_ms,
+			   last_command, last_command_status, last_command_time,
+			   created_at, updated_at, last_checked,
+			   template_config, custom_config
+		FROM projects
+		ORDER BY updated_at DESC
+	`
+
 	rows, err := r.db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("查询失败: %w", err)
 	}
 	defer rows.Close()
 
-	var entries []LogcmdEntry
+	var projects []*model.Project
 	for rows.Next() {
-		var entry LogcmdEntry
-		err := rows.Scan(&entry.ID, &entry.Path, &entry.CreatedAt, &entry.UpdatedAt, &entry.LastChecked)
+		var project model.Project
+		err := rows.Scan(
+			&project.ID,
+			&project.Path,
+			&project.Name,
+			&project.Description,
+			&project.Category,
+			&project.TagsJSON,
+			&project.TotalCommands,
+			&project.SuccessCommands,
+			&project.FailedCommands,
+			&project.TotalDurationMs,
+			&project.LastCommand,
+			&project.LastCommandStatus,
+			&project.LastCommandTime,
+			&project.CreatedAt,
+			&project.UpdatedAt,
+			&project.LastChecked,
+			&project.TemplateJSON,
+			&project.CustomJSON,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("读取数据失败: %w", err)
 		}
-		entries = append(entries, entry)
+
+		if err := project.AfterLoad(); err != nil {
+			return nil, fmt.Errorf("加载项目数据失败: %w", err)
+		}
+
+		projects = append(projects, &project)
 	}
 
-	return entries, nil
+	return projects, nil
 }
 
-// Get 根据ID或路径获取条目
-func (r *Registry) Get(idOrPath string) (*LogcmdEntry, error) {
-	var entry LogcmdEntry
+// Get 根据ID或路径获取项目
+func (r *Registry) Get(idOrPath string) (*model.Project, error) {
 	var query string
 	var args []interface{}
 
 	// 尝试解析为ID
-	var id int
-	_, err := fmt.Sscanf(idOrPath, "%d", &id)
+	id, err := strconv.Atoi(idOrPath)
 	if err == nil {
 		// 按ID查询
-		query = `SELECT id, path, created_at, updated_at, last_checked FROM logcmd_entries WHERE id = ?`
+		query = `
+			SELECT id, path, name, description, category, tags,
+				   total_commands, success_commands, failed_commands, total_duration_ms,
+				   last_command, last_command_status, last_command_time,
+				   created_at, updated_at, last_checked,
+				   template_config, custom_config
+			FROM projects WHERE id = ?
+		`
 		args = []interface{}{id}
 	} else {
 		// 按路径查询
@@ -154,44 +206,153 @@ func (r *Registry) Get(idOrPath string) (*LogcmdEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("获取绝对路径失败: %w", err)
 		}
-		query = `SELECT id, path, created_at, updated_at, last_checked FROM logcmd_entries WHERE path = ?`
+		query = `
+			SELECT id, path, name, description, category, tags,
+				   total_commands, success_commands, failed_commands, total_duration_ms,
+				   last_command, last_command_status, last_command_time,
+				   created_at, updated_at, last_checked,
+				   template_config, custom_config
+			FROM projects WHERE path = ?
+		`
 		args = []interface{}{absPath}
 	}
 
-	err = r.db.QueryRow(query, args...).Scan(&entry.ID, &entry.Path, &entry.CreatedAt, &entry.UpdatedAt, &entry.LastChecked)
+	var project model.Project
+	err = r.db.QueryRow(query, args...).Scan(
+		&project.ID,
+		&project.Path,
+		&project.Name,
+		&project.Description,
+		&project.Category,
+		&project.TagsJSON,
+		&project.TotalCommands,
+		&project.SuccessCommands,
+		&project.FailedCommands,
+		&project.TotalDurationMs,
+		&project.LastCommand,
+		&project.LastCommandStatus,
+		&project.LastCommandTime,
+		&project.CreatedAt,
+		&project.UpdatedAt,
+		&project.LastChecked,
+		&project.TemplateJSON,
+		&project.CustomJSON,
+	)
+
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("未找到目录: %s", idOrPath)
+		return nil, fmt.Errorf("未找到项目: %s", idOrPath)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("查询失败: %w", err)
 	}
 
-	return &entry, nil
-}
-
-// Delete 删除指定的.logcmd目录（支持ID或路径）
-func (r *Registry) Delete(idOrPath string) error {
-	var query string
-	var args []interface{}
-
-	// 尝试解析为ID
-	var id int
-	_, err := fmt.Sscanf(idOrPath, "%d", &id)
-	if err == nil {
-		// 按ID删除
-		query = `DELETE FROM logcmd_entries WHERE id = ?`
-		args = []interface{}{id}
-	} else {
-		// 按路径删除
-		absPath, err := filepath.Abs(idOrPath)
-		if err != nil {
-			return fmt.Errorf("获取绝对路径失败: %w", err)
-		}
-		query = `DELETE FROM logcmd_entries WHERE path = ?`
-		args = []interface{}{absPath}
+	if err := project.AfterLoad(); err != nil {
+		return nil, fmt.Errorf("加载项目数据失败: %w", err)
 	}
 
-	result, err := r.db.Exec(query, args...)
+	return &project, nil
+}
+
+// Update 更新项目信息
+func (r *Registry) Update(project *model.Project) error {
+	if err := project.BeforeSave(); err != nil {
+		return fmt.Errorf("准备保存数据失败: %w", err)
+	}
+
+	project.UpdatedAt = time.Now()
+
+	query := `
+		UPDATE projects SET
+			name = ?,
+			description = ?,
+			category = ?,
+			tags = ?,
+			total_commands = ?,
+			success_commands = ?,
+			failed_commands = ?,
+			total_duration_ms = ?,
+			last_command = ?,
+			last_command_status = ?,
+			last_command_time = ?,
+			updated_at = ?,
+			template_config = ?,
+			custom_config = ?
+		WHERE id = ?
+	`
+
+	_, err := r.db.Exec(query,
+		project.Name,
+		project.Description,
+		project.Category,
+		project.TagsJSON,
+		project.TotalCommands,
+		project.SuccessCommands,
+		project.FailedCommands,
+		project.TotalDurationMs,
+		project.LastCommand,
+		project.LastCommandStatus,
+		project.LastCommandTime,
+		project.UpdatedAt,
+		project.TemplateJSON,
+		project.CustomJSON,
+		project.ID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("更新项目失败: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateStats 更新项目统计信息（在命令执行后调用）
+func (r *Registry) UpdateStats(projectID int, command string, success bool, duration time.Duration) error {
+	status := "success"
+	if !success {
+		status = "failed"
+	}
+
+	now := time.Now()
+
+	query := `
+		UPDATE projects SET
+			total_commands = total_commands + 1,
+			success_commands = success_commands + CASE WHEN ? THEN 1 ELSE 0 END,
+			failed_commands = failed_commands + CASE WHEN ? THEN 0 ELSE 1 END,
+			total_duration_ms = total_duration_ms + ?,
+			last_command = ?,
+			last_command_status = ?,
+			last_command_time = ?,
+			updated_at = ?
+		WHERE id = ?
+	`
+
+	_, err := r.db.Exec(query,
+		success,
+		success,
+		duration.Milliseconds(),
+		command,
+		status,
+		now,
+		now,
+		projectID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("更新统计信息失败: %w", err)
+	}
+
+	return nil
+}
+
+// Delete 删除指定的项目，并清理其日志目录
+func (r *Registry) Delete(idOrPath string) error {
+	project, err := r.Get(idOrPath)
+	if err != nil {
+		return err
+	}
+
+	result, err := r.db.Exec(`DELETE FROM projects WHERE id = ?`, project.ID)
 	if err != nil {
 		return fmt.Errorf("删除失败: %w", err)
 	}
@@ -202,71 +363,37 @@ func (r *Registry) Delete(idOrPath string) error {
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("未找到目录: %s", idOrPath)
+		return fmt.Errorf("未找到项目: %s", idOrPath)
+	}
+
+	// 删除日志目录，不存在时忽略
+	if err := os.RemoveAll(project.Path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("删除项目目录失败: %w", err)
 	}
 
 	return nil
 }
 
-// DeleteAll 删除所有已注册的目录
-func (r *Registry) DeleteAll() error {
-	_, err := r.db.Exec(`DELETE FROM logcmd_entries`)
-	if err != nil {
-		return fmt.Errorf("删除所有目录失败: %w", err)
-	}
-	return nil
-}
-
-// UpdateLastChecked 更新最后检查时间（懒更新）
-func (r *Registry) UpdateLastChecked(idOrPath string) error {
-	var query string
-	var args []interface{}
-
-	now := time.Now()
-
-	// 尝试解析为ID
-	var id int
-	_, err := fmt.Sscanf(idOrPath, "%d", &id)
-	if err == nil {
-		// 按ID更新
-		query = `UPDATE logcmd_entries SET last_checked = ? WHERE id = ?`
-		args = []interface{}{now, id}
-	} else {
-		// 按路径更新
-		absPath, err := filepath.Abs(idOrPath)
-		if err != nil {
-			return fmt.Errorf("获取绝对路径失败: %w", err)
-		}
-		query = `UPDATE logcmd_entries SET last_checked = ? WHERE path = ?`
-		args = []interface{}{now, absPath}
-	}
-
-	_, err = r.db.Exec(query, args...)
-	if err != nil {
-		return fmt.Errorf("更新检查时间失败: %w", err)
-	}
-
-	return nil
-}
-
-// CheckAndCleanup 检查所有目录是否仍然存在，删除不存在的条目（懒更新检查）
+// CheckAndCleanup 检查所有目录是否仍然存在，删除不存在的条目
 func (r *Registry) CheckAndCleanup() error {
-	entries, err := r.List()
+	projects, err := r.List()
 	if err != nil {
 		return err
 	}
 
-	for _, entry := range entries {
+	for _, project := range projects {
 		// 检查目录是否存在
-		if _, err := os.Stat(entry.Path); os.IsNotExist(err) {
+		if _, err := os.Stat(project.Path); os.IsNotExist(err) {
 			// 目录不存在，删除条目
-			if err := r.Delete(fmt.Sprintf("%d", entry.ID)); err != nil {
-				return fmt.Errorf("删除无效目录失败 [%d: %s]: %w", entry.ID, entry.Path, err)
+			if err := r.Delete(fmt.Sprintf("%d", project.ID)); err != nil {
+				return fmt.Errorf("删除无效项目失败 [%d: %s]: %w", project.ID, project.Path, err)
 			}
 		} else {
 			// 更新检查时间
-			if err := r.UpdateLastChecked(fmt.Sprintf("%d", entry.ID)); err != nil {
-				return fmt.Errorf("更新检查时间失败 [%d: %s]: %w", entry.ID, entry.Path, err)
+			project.LastChecked = time.Now()
+			query := `UPDATE projects SET last_checked = ? WHERE id = ?`
+			if _, err := r.db.Exec(query, project.LastChecked, project.ID); err != nil {
+				return fmt.Errorf("更新检查时间失败: %w", err)
 			}
 		}
 	}
@@ -280,4 +407,50 @@ func (r *Registry) Close() error {
 		return r.db.Close()
 	}
 	return nil
+}
+
+// UpdateLastChecked 更新项目的最后检查时间
+func (r *Registry) UpdateLastChecked(idOrPath string) error {
+	var query string
+	var args []interface{}
+
+	now := time.Now()
+
+	if id, err := strconv.Atoi(idOrPath); err == nil {
+		query = `UPDATE projects SET last_checked = ? WHERE id = ?`
+		args = []interface{}{now, id}
+	} else {
+		absPath, err := filepath.Abs(idOrPath)
+		if err != nil {
+			return fmt.Errorf("获取绝对路径失败: %w", err)
+		}
+		query = `UPDATE projects SET last_checked = ? WHERE path = ?`
+		args = []interface{}{now, absPath}
+	}
+
+	result, err := r.db.Exec(query, args...)
+	if err != nil {
+		return fmt.Errorf("更新检查时间失败: %w", err)
+	}
+
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return fmt.Errorf("未找到项目: %s", idOrPath)
+	}
+
+	return nil
+}
+
+// extractProjectName 从路径中提取项目名称
+func extractProjectName(path string) string {
+	sep := string(os.PathSeparator)
+	suffix := sep + ".logcmd"
+	if strings.HasSuffix(path, suffix) {
+		path = strings.TrimSuffix(path, suffix)
+	}
+	return filepath.Base(path)
+}
+
+// GetDB 获取数据库连接（供其他模块使用）
+func (r *Registry) GetDB() *sql.DB {
+	return r.db
 }

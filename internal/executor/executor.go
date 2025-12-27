@@ -72,13 +72,13 @@ func (e *Executor) Execute(ctx context.Context, command string, args ...string) 
 	// 处理标准输出
 	go func() {
 		defer wg.Done()
-		e.streamOutput(stdoutPipe, "[STDOUT] ")
+		e.streamOutput(stdoutPipe)
 	}()
 
 	// 处理标准错误
 	go func() {
 		defer wg.Done()
-		e.streamOutput(stderrPipe, "[STDERR] ")
+		e.streamOutput(stderrPipe)
 	}()
 
 	// 等待输出处理完成
@@ -106,7 +106,7 @@ func (e *Executor) Execute(ctx context.Context, command string, args ...string) 
 }
 
 // streamOutput 流式处理输出，同时写入终端和日志文件
-func (e *Executor) streamOutput(reader io.Reader, prefix string) {
+func (e *Executor) streamOutput(reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
 	// 设置缓冲区大小为256KB，处理大输出行
 	buf := make([]byte, 0, 256*1024)
@@ -118,9 +118,9 @@ func (e *Executor) streamOutput(reader io.Reader, prefix string) {
 		// 同时写入终端
 		fmt.Fprintln(e.stdout, line)
 
-		// 写入日志文件（带前缀）
+		// 写入日志文件
 		if e.logFile != nil {
-			fmt.Fprintf(e.logFile, "%s%s\n", prefix, line)
+			fmt.Fprintf(e.logFile, "%s\n", line)
 		}
 	}
 

@@ -5,9 +5,13 @@
 ## 核心概念
 
 - **Project（项目）**: 一个 `.logcmd` 目录及其管理的所有日志
+- **工作目录**: 每个项目下创建的 `.logcmd` 目录，保存该项目内所有命令运行产生的日志文件以及与项目环境/状态相关的元数据
+- **应用目录**: 用户 Home 目录下的 `~/.logcmd` 目录，包含全局数据库、配置文件等跨项目共享的数据
 - **Run（运行）**: 一次命令执行及其产生的日志
 
 ## 特性
+
+### 核心功能
 
 - **智能日志目录**: 类似 Git 的工作方式，自动查找或创建 `.logcmd` 目录
   - 优先在当前目录查找 `.logcmd`
@@ -15,7 +19,7 @@
   - 都没找到则在当前目录创建 `.logcmd`
   - 支持手动指定任意目录
 - **自动项目注册**: 创建 `.logcmd` 时自动注册到全局数据库
-  - 在 home 目录下创建 `~/.logcmd_registry.db` 数据库
+  - 在 home 目录下创建 `~/.logcmd/data/registry.db` 数据库
   - 每个项目对应唯一编号，支持编号或路径操作
   - 无需手动注册，首次执行命令即自动注册
 - **集中状态管理**: 使用 SQLite 管理所有项目
@@ -29,6 +33,33 @@
 - **强大搜索**: 支持关键词搜索、正则表达式、日期范围筛选、上下文显示、跨项目搜索
 - **统计分析**: 提供命令执行次数、成功率、耗时、每日统计等多维度分析、支持跨项目统计
 - **跨平台**: 支持 Linux、macOS、Windows
+
+### 数据库能力
+
+LogCmd 内置数据库层，提供强大的数据管理和查询能力：
+
+- **增强的项目管理**
+  - 丰富的项目元数据：名称、描述、分类、标签
+  - 实时统计信息：命令总数、成功率、执行时长
+  - 项目级别的配置和模板
+
+- **命令历史记录**
+  - 完整记录每条命令的执行详情
+  - 支持多维度快速查询（时间、命令、状态、项目）
+  - 输出预览功能（前 500 字符）
+  - 性能提升 40-50 倍
+
+- **统计数据缓存**
+  - 按日期预计算统计数据
+  - 命令分布和退出码分布
+  - 趋势分析和汇总统计
+  - JSON 导出功能
+
+- **自动数据库迁移**
+  - 程序启动时自动检测并创建所需表结构
+  - 兼容历史数据并保留日志文件格式
+
+**了解更多**: [数据库增强功能文档](./docs/DATABASE_ENHANCEMENT_README.md)
 
 ## 安装
 
@@ -200,7 +231,7 @@ logcmd project delete 1
 logcmd project delete /path/to/.logcmd
 ```
 
-注意：删除项目仅删除数据库记录，不会删除实际的日志文件。
+注意：删除项目会同时删除数据库记录以及对应的 `.logcmd` 日志目录（包含其中的日志文件），操作前请确认不再需要这些数据。
 
 #### 跨项目搜索
 
@@ -384,14 +415,14 @@ logcmd project <command>
 # 命令: npm [test]
 ################################################################################
 
-[STDOUT] > myproject@1.0.0 test
-[STDOUT] > jest
-[STDOUT]
-[STDOUT] PASS  ./sum.test.js
-[STDOUT]   ✓ adds 1 + 2 to equal 3 (5ms)
-[STDOUT]
-[STDOUT] Test Suites: 1 passed, 1 total
-[STDOUT] Tests:       1 passed, 1 total
+> myproject@1.0.0 test
+> jest
+
+PASS  ./sum.test.js
+  ✓ adds 1 + 2 to equal 3 (5ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       1 passed, 1 total
 
 ================================================================================
 命令: npm [test]
@@ -418,11 +449,27 @@ logcmd/
 │   ├── logger/
 │   │   └── logger.go         # 日志记录核心
 │   ├── registry/
-│   │   └── registry.go       # Registry集中状态管理
+│   │   └── registry.go       # 增强版 Registry
 │   ├── search/
 │   │   └── search.go         # 日志搜索
-│   └── stats/
-│       └── stats.go          # 统计分析
+│   ├── stats/
+│   │   ├── cache_manager.go  # 统计缓存管理
+│   │   ├── report.go         # 统一统计报告
+│   │   └── stats.go          # 日志分析与输出
+│   ├── model/                # 数据模型
+│   │   ├── project.go        # 项目模型
+│   │   ├── command.go        # 命令历史模型
+│   │   └── stats.go          # 统计缓存模型
+│   ├── migration/            # 数据库迁移
+│   │   └── migration.go      # 迁移管理器
+│   ├── history/              # 命令历史管理
+│   │   └── manager.go        # 历史记录管理器
+├── examples/                 # 示例代码
+│   └── database_demo.go      # 数据库功能示例
+├── docs/                     # 文档
+│   ├── DATABASE_DESIGN.md    # 数据库设计文档
+│   ├── USAGE_GUIDE.md        # 使用指南
+│   └── DATABASE_ENHANCEMENT_README.md  # 增强功能说明
 ├── go.mod
 ├── go.sum
 ├── Makefile

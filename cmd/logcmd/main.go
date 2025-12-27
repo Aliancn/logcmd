@@ -5,6 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aliancn/logcmd/internal/config"
@@ -112,11 +116,23 @@ func runCommandWithArgs(args []string) {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	// 创建一个监听中断信号的 Context
+	// 这确保了在接收到 Ctrl+C 时，我们可以优雅地关闭子进程并保存数据
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	command := args[0]
 	cmdArgs := args[1:]
 
 	if err := log.Run(ctx, command, cmdArgs...); err != nil {
+		// 如果是因为上下文取消（用户中断）导致的错误，我们可以选择静默或以不同方式处理
+		// 但通常 log.Run 会返回命令的退出码错误，我们仍然将其打印出来，
+		// 除非它是 context.Canceled 错误（虽然 log.Run 内部通常处理了它）
+		if ctx.Err() == context.Canceled {
+			fmt.Println("\n命令已由用户中断")
+			// 使用 130 退出码 (标准 SIGINT 退出码)
+			os.Exit(130)
+		}
 		fmt.Fprintf(os.Stderr, "执行失败: %v\n", err)
 		os.Exit(1)
 	}
@@ -280,20 +296,44 @@ func analyzeLogs() {
 		return
 	}
 
-	// 确定统计目录
-	statsDirPath := *statsDir
-	if statsDirPath == "" {
-		statsDirPath = config.DefaultConfig().LogDir
+	if statsDir != nil && *statsDir != "" {
+		if err := analyzeLogDir(*statsDir); err != nil {
+			fmt.Fprintf(os.Stderr, "统计分析失败: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
-	analyzer := stats.New(statsDirPath)
-	statistics, err := analyzer.Analyze()
-	if err != nil {
+	cfg := config.DefaultConfig()
+	logDirPath := filepath.Clean(cfg.LogDir)
+
+	reg, err := registry.New()
+	if err == nil {
+		defer reg.Close()
+
+		project, getErr := reg.Get(logDirPath)
+		if getErr != nil {
+			if project, getErr = reg.Register(logDirPath); getErr != nil {
+				fmt.Fprintf(os.Stderr, "注册项目失败: %v\n", getErr)
+			}
+		}
+
+		if project != nil {
+			cacheManager := stats.NewCacheManager(reg.GetDB())
+			if dbErr := printProjectStatsFromDB(cacheManager, project.ID, project.Name, project.Path); dbErr == nil {
+				return
+			} else {
+				fmt.Fprintf(os.Stderr, "数据库统计失败，回退到日志扫描: %v\n", dbErr)
+			}
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "初始化项目注册表失败: %v\n", err)
+	}
+
+	if err := analyzeLogDir(logDirPath); err != nil {
 		fmt.Fprintf(os.Stderr, "统计分析失败: %v\n", err)
 		os.Exit(1)
 	}
-
-	stats.PrintStats(statistics)
 }
 
 func analyzeAllProjects() {
@@ -317,6 +357,8 @@ func analyzeAllProjects() {
 
 	fmt.Printf("正在统计 %d 个项目...\n\n", len(entries))
 
+	cacheManager := stats.NewCacheManager(reg.GetDB())
+
 	// 对每个项目执行统计，同时清理不存在的项目
 	for i, entry := range entries {
 		// 检查目录是否存在
@@ -331,14 +373,14 @@ func analyzeAllProjects() {
 
 		fmt.Printf("[%d/%d] 统计: %s\n", i+1, len(entries), entry.Path)
 
-		analyzer := stats.New(entry.Path)
-		statistics, err := analyzer.Analyze()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  警告: 统计分析失败: %v\n", err)
-			continue
+		if err := printProjectStatsFromDB(cacheManager, entry.ID, entry.Name, entry.Path); err != nil {
+			fmt.Fprintf(os.Stderr, "  警告: 数据库统计失败，尝试文件扫描: %v\n", err)
+			if err := analyzeLogDir(entry.Path); err != nil {
+				fmt.Fprintf(os.Stderr, "  警告: 文件统计分析失败: %v\n", err)
+				continue
+			}
 		}
 
-		stats.PrintStats(statistics)
 		fmt.Println()
 
 		// 更新最后检查时间
@@ -346,6 +388,61 @@ func analyzeAllProjects() {
 	}
 
 	fmt.Println("统计完成")
+}
+
+func analyzeLogDir(logDirPath string) error {
+	analyzer := stats.New(logDirPath)
+	statistics, err := analyzer.Analyze()
+	if err != nil {
+		return err
+	}
+	statistics.ProjectName = resolveProjectName("", logDirPath)
+
+	stats.PrintStats(statistics)
+	return nil
+}
+
+func printProjectStatsFromDB(manager *stats.CacheManager, projectID int, projectName, projectPath string) error {
+	if manager == nil {
+		return fmt.Errorf("统计缓存管理器未初始化")
+	}
+
+	// 确保所有历史记录都已生成统计缓存
+	if err := manager.Sync(projectID); err != nil {
+		fmt.Fprintf(os.Stderr, "警告: 同步统计缓存失败: %v\n", err)
+	}
+
+	summary, err := manager.GetProjectSummary(projectID)
+	if err != nil {
+		return err
+	}
+
+	if summary == nil {
+		if err := manager.GenerateForProject(projectID); err != nil {
+			return err
+		}
+		summary, err = manager.GetProjectSummary(projectID)
+		if err != nil {
+			return err
+		}
+		if summary == nil {
+			return fmt.Errorf("数据库尚未生成统计数据")
+		}
+	}
+
+	report := stats.FromCache(summary, resolveProjectName(projectName, projectPath))
+	if report == nil {
+		return fmt.Errorf("数据库尚未生成统计数据")
+	}
+	stats.PrintStats(report)
+	return nil
+}
+
+func resolveProjectName(name, logDir string) string {
+	if strings.TrimSpace(name) != "" {
+		return name
+	}
+	return template.GetProjectName(logDir)
 }
 
 func manageProject(cmd string, args []string) {
@@ -371,19 +468,26 @@ func manageProject(cmd string, args []string) {
 		}
 
 		fmt.Printf("已注册的项目 (共%d个):\n\n", len(entries))
-		fmt.Printf("%-5s %-50s %-20s\n", "ID", "路径", "最后检查时间")
-		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Printf("%-5s %-20s %-45s %-19s %-8s %-10s %s\n", "ID", "项目名称", "路径", "最后执行", "成功率", "命令数", "存在")
+		fmt.Println(strings.Repeat("-", 130))
 		for _, entry := range entries {
 			// 检查目录是否仍然存在
 			exists := "✓"
 			if _, err := os.Stat(entry.Path); os.IsNotExist(err) {
 				exists = "✗"
 			}
-			fmt.Printf("%-5d %-50s %-20s %s\n",
-				entry.ID,
-				entry.Path,
-				entry.LastChecked.Format("2006-01-02 15:04:05"),
-				exists)
+			lastRun := "-"
+			if entry.LastCommandTime.Valid {
+				lastRun = entry.LastCommandTime.Time.Format("2006-01-02 15:04:05")
+			}
+			name := entry.Name
+			if name == "" {
+				name = template.GetProjectName(entry.Path)
+			}
+			successRate := fmt.Sprintf("%.1f%%", entry.GetSuccessRate())
+
+			fmt.Printf("%-5d %-20s %-45s %-19s %-8s %-10d %s\n",
+				entry.ID, name, entry.Path, lastRun, successRate, entry.TotalCommands, exists)
 		}
 
 	case "clean":

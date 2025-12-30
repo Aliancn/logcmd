@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -30,12 +31,15 @@ func NewStatsService(reg *registry.Registry) *StatsService {
 }
 
 // StatsForProject 返回单个项目的统计数据。
-func (s *StatsService) StatsForProject(project *model.Project) (*stats.Stats, error) {
+func (s *StatsService) StatsForProject(ctx context.Context, project *model.Project) (*stats.Stats, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if project == nil {
 		return nil, fmt.Errorf("project 不能为空")
 	}
 
-	report, err := s.statsFromCache(project)
+	report, err := s.statsFromCache(ctx, project)
 	if err == nil && report != nil {
 		return report, nil
 	}
@@ -43,7 +47,11 @@ func (s *StatsService) StatsForProject(project *model.Project) (*stats.Stats, er
 		fmt.Fprintf(os.Stderr, "警告: 数据库统计失败，回退到日志扫描: %v\n", err)
 	}
 
-	report, logErr := s.statsFromLogs(project.Path, s.displayName(project))
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	report, logErr := s.statsFromLogs(ctx, project.Path, s.displayName(project))
 	if logErr != nil {
 		if err != nil {
 			return nil, fmt.Errorf("日志扫描失败: %w; 数据库统计失败: %v", logErr, err)
@@ -54,22 +62,30 @@ func (s *StatsService) StatsForProject(project *model.Project) (*stats.Stats, er
 }
 
 // StatsForPath 根据目录返回统计。若注册表可用则自动注册。
-func (s *StatsService) StatsForPath(path string) (*stats.Stats, error) {
-	if s.registry == nil {
-		return s.statsFromLogs(path, template.GetProjectName(path))
+func (s *StatsService) StatsForPath(ctx context.Context, path string) (*stats.Stats, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
-	project, err := s.ProjectByPath(path)
+	if s.registry == nil {
+		return s.statsFromLogs(ctx, path, template.GetProjectName(path))
+	}
+
+	project, err := s.ProjectByPath(ctx, path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "警告: 注册项目失败，回退到日志扫描: %v\n", err)
-		return s.statsFromLogs(path, template.GetProjectName(path))
+		return s.statsFromLogs(ctx, path, template.GetProjectName(path))
 	}
 
-	return s.StatsForProject(project)
+	return s.StatsForProject(ctx, project)
 }
 
 // ProjectByPath 查找（或注册）指定目录对应的项目。
-func (s *StatsService) ProjectByPath(path string) (*model.Project, error) {
+func (s *StatsService) ProjectByPath(ctx context.Context, path string) (*model.Project, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	if s.registry == nil {
 		return nil, fmt.Errorf("项目注册表未初始化")
 	}
@@ -79,16 +95,28 @@ func (s *StatsService) ProjectByPath(path string) (*model.Project, error) {
 		return project, nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	return s.registry.Register(path)
 }
 
-func (s *StatsService) statsFromCache(project *model.Project) (*stats.Stats, error) {
+func (s *StatsService) statsFromCache(ctx context.Context, project *model.Project) (*stats.Stats, error) {
 	if s.cache == nil {
 		return nil, fmt.Errorf("统计缓存不可用")
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	if err := s.cache.Sync(project.ID); err != nil {
 		return nil, fmt.Errorf("同步统计缓存失败: %w", err)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	summary, err := s.cache.GetProjectSummary(project.ID)
@@ -97,6 +125,9 @@ func (s *StatsService) statsFromCache(project *model.Project) (*stats.Stats, err
 	}
 
 	if summary == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := s.cache.GenerateForProject(project.ID); err != nil {
 			return nil, fmt.Errorf("生成统计缓存失败: %w", err)
 		}
@@ -116,9 +147,9 @@ func (s *StatsService) statsFromCache(project *model.Project) (*stats.Stats, err
 	return report, nil
 }
 
-func (s *StatsService) statsFromLogs(path, displayName string) (*stats.Stats, error) {
+func (s *StatsService) statsFromLogs(ctx context.Context, path, displayName string) (*stats.Stats, error) {
 	analyzer := stats.New(path)
-	report, err := analyzer.Analyze()
+	report, err := analyzer.Analyze(ctx)
 	if err != nil {
 		return nil, err
 	}

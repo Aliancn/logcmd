@@ -2,6 +2,7 @@ package stats
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -88,10 +89,14 @@ func New(logDir string) *Analyzer {
 }
 
 // Analyze 执行统计分析
-func (a *Analyzer) Analyze() (*Stats, error) {
+func (a *Analyzer) Analyze(ctx context.Context) (*Stats, error) {
 	err := filepath.Walk(a.logDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 
 		if info.IsDir() {
@@ -103,7 +108,7 @@ func (a *Analyzer) Analyze() (*Stats, error) {
 		}
 
 		// 分析单个日志文件
-		if err := a.analyzeFile(path); err != nil {
+		if err := a.analyzeFile(ctx, path); err != nil {
 			fmt.Fprintf(os.Stderr, "分析文件 %s 失败: %v\n", path, err)
 		}
 
@@ -111,6 +116,9 @@ func (a *Analyzer) Analyze() (*Stats, error) {
 	})
 
 	if err != nil {
+		if ctx.Err() != nil && err == ctx.Err() {
+			return nil, err
+		}
 		return nil, fmt.Errorf("遍历日志目录失败: %w", err)
 	}
 
@@ -125,7 +133,7 @@ func (a *Analyzer) Analyze() (*Stats, error) {
 }
 
 // analyzeFile 分析单个日志文件
-func (a *Analyzer) analyzeFile(filePath string) error {
+func (a *Analyzer) analyzeFile(ctx context.Context, filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -134,11 +142,11 @@ func (a *Analyzer) analyzeFile(filePath string) error {
 
 	metadata := &LogMetadata{}
 
-	if err := parseLogHeader(file, metadata); err != nil {
+	if err := parseLogHeader(ctx, file, metadata); err != nil {
 		return err
 	}
 
-	if err := parseLogFooter(file, metadata); err != nil {
+	if err := parseLogFooter(ctx, file, metadata); err != nil {
 		return err
 	}
 
@@ -155,7 +163,7 @@ func (a *Analyzer) analyzeFile(filePath string) error {
 	return nil
 }
 
-func parseLogHeader(file *os.File, meta *LogMetadata) error {
+func parseLogHeader(ctx context.Context, file *os.File, meta *LogMetadata) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
@@ -163,6 +171,9 @@ func parseLogHeader(file *os.File, meta *LogMetadata) error {
 	scanner := bufio.NewScanner(file)
 	lines := 0
 	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		line := scanner.Text()
 		lines++
 		if matches := dateRegex.FindStringSubmatch(line); matches != nil {
@@ -176,10 +187,18 @@ func parseLogHeader(file *os.File, meta *LogMetadata) error {
 		}
 	}
 
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	return nil
 }
 
-func parseLogFooter(file *os.File, meta *LogMetadata) error {
+func parseLogFooter(ctx context.Context, file *os.File, meta *LogMetadata) error {
 	info, err := file.Stat()
 	if err != nil {
 		return err
@@ -196,6 +215,10 @@ func parseLogFooter(file *os.File, meta *LogMetadata) error {
 	}
 	start := size - int64(readSize)
 	buf := make([]byte, readSize)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	if _, err := file.ReadAt(buf, start); err != nil && err != io.EOF {
 		return err
 	}

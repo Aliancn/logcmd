@@ -1,11 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"sync"
+	"syscall"
 
 	"github.com/aliancn/logcmd/internal/config"
+	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/services"
 	"github.com/aliancn/logcmd/internal/stats"
@@ -22,8 +27,20 @@ var statsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "统计日志数据",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runStats()
+		return runStats(cmd)
 	},
+}
+
+type statsJob struct {
+	index int
+	entry *model.Project
+}
+
+type statsJobResult struct {
+	index  int
+	entry  *model.Project
+	report *stats.Stats
+	err    error
 }
 
 func init() {
@@ -33,12 +50,15 @@ func init() {
 	statsCmd.Flags().StringVar(&statsDirFlag, "dir", "", "日志目录路径")
 }
 
-func runStats() error {
+func runStats(cmd *cobra.Command) error {
 	cfg := config.DefaultConfig()
 	logDirPath := filepath.Clean(cfg.LogDir)
 	if statsDirFlag != "" {
 		logDirPath = filepath.Clean(statsDirFlag)
 	}
+
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
 	reg, err := registry.New()
 	var svc *services.StatsService
@@ -51,15 +71,15 @@ func runStats() error {
 		if svc == nil || reg == nil {
 			return fmt.Errorf("初始化项目注册表失败: %w", err)
 		}
-		return analyzeAllProjects(reg, svc)
+		return analyzeAllProjects(ctx, reg, svc)
 	}
 
 	if svc == nil {
 		fmt.Fprintf(os.Stderr, "警告: 统计服务未初始化，直接扫描日志目录\n")
-		return analyzeLogDir(logDirPath)
+		return analyzeLogDir(ctx, logDirPath)
 	}
 
-	report, statErr := svc.StatsForPath(logDirPath)
+	report, statErr := svc.StatsForPath(ctx, logDirPath)
 	if statErr != nil {
 		return fmt.Errorf("统计分析失败: %w", statErr)
 	}
@@ -67,7 +87,7 @@ func runStats() error {
 	return nil
 }
 
-func analyzeAllProjects(reg *registry.Registry, svc *services.StatsService) error {
+func analyzeAllProjects(ctx context.Context, reg *registry.Registry, svc *services.StatsService) error {
 	entries, err := reg.List()
 	if err != nil {
 		return fmt.Errorf("获取项目列表失败: %w", err)
@@ -79,23 +99,72 @@ func analyzeAllProjects(reg *registry.Registry, svc *services.StatsService) erro
 
 	fmt.Printf("正在统计 %d 个项目...\n\n", len(entries))
 
-	for i, entry := range entries {
-		if _, err := os.Stat(entry.Path); os.IsNotExist(err) {
-			fmt.Printf("[%d/%d] 跳过（已删除）: %s\n", i+1, len(entries), entry.Path)
+	jobs := make(chan statsJob)
+	resultsCh := make(chan statsJobResult, workerCount(len(entries)))
+	var wg sync.WaitGroup
+
+	workerTotal := workerCount(len(entries))
+	for i := 0; i < workerTotal; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if ctx.Err() != nil {
+					resultsCh <- statsJobResult{index: job.index, entry: job.entry, err: ctx.Err()}
+					continue
+				}
+				report, err := svc.StatsForProject(ctx, job.entry)
+				resultsCh <- statsJobResult{index: job.index, entry: job.entry, report: report, err: err}
+			}
+		}()
+	}
+
+	scheduledEntries := make([]*model.Project, 0, len(entries))
+
+dispatchLoop:
+	for _, entry := range entries {
+		if _, statErr := os.Stat(entry.Path); os.IsNotExist(statErr) {
+			fmt.Printf("[%d/%d] 跳过（已删除）: %s\n", len(scheduledEntries)+1, len(entries), entry.Path)
 			if err := reg.Delete(fmt.Sprintf("%d", entry.ID)); err != nil {
 				fmt.Fprintf(os.Stderr, "  警告: 删除无效项目失败: %v\n", err)
 			}
 			continue
 		}
 
-		fmt.Printf("[%d/%d] 统计: %s\n", i+1, len(entries), entry.Path)
+		jobIndex := len(scheduledEntries)
+		scheduledEntries = append(scheduledEntries, entry)
 
-		report, statErr := svc.StatsForProject(entry)
-		if statErr != nil {
-			fmt.Fprintf(os.Stderr, "  警告: 统计失败: %v\n", statErr)
+		select {
+		case <-ctx.Done():
+			scheduledEntries = scheduledEntries[:jobIndex]
+			break dispatchLoop
+		case jobs <- statsJob{index: jobIndex, entry: entry}:
+		}
+	}
+
+	close(jobs)
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	results := make([]statsJobResult, len(scheduledEntries))
+	for res := range resultsCh {
+		results[res.index] = res
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	for i, entry := range scheduledEntries {
+		fmt.Printf("[%d/%d] 统计: %s\n", i+1, len(entries), entry.Path)
+		result := results[i]
+		if result.err != nil {
+			fmt.Fprintf(os.Stderr, "  警告: 统计失败: %v\n", result.err)
 			continue
 		}
-		stats.PrintStats(report)
+		stats.PrintStats(result.report)
 		fmt.Println()
 		reg.UpdateLastChecked(fmt.Sprintf("%d", entry.ID))
 	}
@@ -104,9 +173,9 @@ func analyzeAllProjects(reg *registry.Registry, svc *services.StatsService) erro
 	return nil
 }
 
-func analyzeLogDir(logDirPath string) error {
+func analyzeLogDir(ctx context.Context, logDirPath string) error {
 	analyzer := stats.New(logDirPath)
-	statistics, err := analyzer.Analyze()
+	statistics, err := analyzer.Analyze(ctx)
 	if err != nil {
 		return fmt.Errorf("统计分析失败: %w", err)
 	}

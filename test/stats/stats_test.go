@@ -1,6 +1,7 @@
 package stats_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,7 +23,7 @@ func TestAnalyzeEmptyDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	analyzer := stats.New(tmpDir)
 
-	result, err := analyzer.Analyze()
+	result, err := analyzer.Analyze(context.Background())
 	if err != nil {
 		t.Fatalf("Analyze() 失败: %v", err)
 	}
@@ -68,7 +69,7 @@ test
 	}
 
 	analyzer := stats.New(tmpDir)
-	result, err := analyzer.Analyze()
+	result, err := analyzer.Analyze(context.Background())
 	if err != nil {
 		t.Fatalf("Analyze() 失败: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestAnalyzeMultipleLogFiles(t *testing.T) {
 	}
 
 	analyzer := stats.New(tmpDir)
-	result, err := analyzer.Analyze()
+	result, err := analyzer.Analyze(context.Background())
 	if err != nil {
 		t.Fatalf("Analyze() 失败: %v", err)
 	}
@@ -182,7 +183,7 @@ func TestAnalyzeWithDailyStats(t *testing.T) {
 	}
 
 	analyzer := stats.New(tmpDir)
-	result, err := analyzer.Analyze()
+	result, err := analyzer.Analyze(context.Background())
 	if err != nil {
 		t.Fatalf("Analyze() 失败: %v", err)
 	}
@@ -229,7 +230,7 @@ output
 	}
 
 	analyzer := stats.New(tmpDir)
-	result, err := analyzer.Analyze()
+	result, err := analyzer.Analyze(context.Background())
 	if err != nil {
 		t.Fatalf("Analyze() 失败: %v", err)
 	}
@@ -260,7 +261,7 @@ output
 	}
 
 	analyzer := stats.New(tmpDir)
-	result, err := analyzer.Analyze()
+	result, err := analyzer.Analyze(context.Background())
 	if err != nil {
 		t.Fatalf("Analyze() 失败: %v", err)
 	}
@@ -272,7 +273,7 @@ output
 
 func TestAnalyzeNonExistentDirectory(t *testing.T) {
 	analyzer := stats.New("/nonexistent/directory")
-	_, err := analyzer.Analyze()
+	_, err := analyzer.Analyze(context.Background())
 	if err == nil {
 		t.Error("Analyze() 应该对不存在的目录返回错误")
 	}
@@ -282,7 +283,7 @@ func TestStatsInitialization(t *testing.T) {
 	tmpDir := t.TempDir()
 	analyzer := stats.New(tmpDir)
 
-	result, err := analyzer.Analyze()
+	result, err := analyzer.Analyze(context.Background())
 	if err != nil {
 		t.Fatalf("Analyze() 失败: %v", err)
 	}
@@ -318,7 +319,7 @@ func TestAnalyzeSkipNonLogFiles(t *testing.T) {
 	}
 
 	analyzer := stats.New(tmpDir)
-	result, err := analyzer.Analyze()
+	result, err := analyzer.Analyze(context.Background())
 	if err != nil {
 		t.Fatalf("Analyze() 失败: %v", err)
 	}

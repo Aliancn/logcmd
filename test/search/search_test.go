@@ -1,6 +1,7 @@
 package search_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,7 +70,7 @@ func TestSearchEmptyDirectory(t *testing.T) {
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search()
+	results, err := searcher.Search(context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -104,7 +105,7 @@ Line 5: final line`
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search()
+	results, err := searcher.Search(context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -141,7 +142,7 @@ Line 3: TeSt mixed case`
 		}
 
 		searcher, _ := search.New(options)
-		results, _ := searcher.Search()
+		results, _ := searcher.Search(context.Background())
 
 		// 只应该匹配小写的 "test"
 		if len(results) != 1 {
@@ -157,7 +158,7 @@ Line 3: TeSt mixed case`
 		}
 
 		searcher, _ := search.New(options)
-		results, _ := searcher.Search()
+		results, _ := searcher.Search(context.Background())
 
 		// 应该匹配所有变体
 		if len(results) != 3 {
@@ -190,7 +191,7 @@ Line 4: testing789`
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search()
+	results, err := searcher.Search(context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -226,7 +227,7 @@ Line 5`
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search()
+	results, err := searcher.Search(context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -279,7 +280,7 @@ func TestSearchOnlyLogFiles(t *testing.T) {
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search()
+	results, err := searcher.Search(context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -317,7 +318,7 @@ func TestSearchWithDateRange(t *testing.T) {
 		}
 
 		searcher, _ := search.New(options)
-		results, _ := searcher.Search()
+		results, _ := searcher.Search(context.Background())
 
 		// 文件是10天前的，不应该被搜索
 		if len(results) != 0 {
@@ -333,7 +334,7 @@ func TestSearchWithDateRange(t *testing.T) {
 		}
 
 		searcher, _ := search.New(options)
-		results, _ := searcher.Search()
+		results, _ := searcher.Search(context.Background())
 
 		// 文件是10天前的，应该被搜索到
 		if len(results) != 1 {
@@ -357,7 +358,7 @@ func TestSearchResultFields(t *testing.T) {
 	}
 
 	searcher, _ := search.New(options)
-	results, _ := searcher.Search()
+	results, _ := searcher.Search(context.Background())
 
 	if len(results) != 1 {
 		t.Fatalf("应该找到 1 个结果")
@@ -426,7 +427,7 @@ func TestSearchNonExistentDirectory(t *testing.T) {
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	_, err = searcher.Search()
+	_, err = searcher.Search(context.Background())
 	if err == nil {
 		t.Error("Search() 应该对不存在的目录返回错误")
 	}

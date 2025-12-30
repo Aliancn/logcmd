@@ -2,6 +2,7 @@ package search
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,27 +13,33 @@ import (
 
 // SearchOptions 搜索选项
 type SearchOptions struct {
-	LogDir      string    // 日志目录
-	Keyword     string    // 搜索关键词
-	UseRegex    bool      // 使用正则表达式
-	StartDate   time.Time // 开始日期
-	EndDate     time.Time // 结束日期
-	CaseSensitive bool    // 区分大小写
-	ShowContext int       // 显示上下文行数
+	LogDir        string    // 日志目录
+	Keyword       string    // 搜索关键词
+	UseRegex      bool      // 使用正则表达式
+	StartDate     time.Time // 开始日期
+	EndDate       time.Time // 结束日期
+	CaseSensitive bool      // 区分大小写
+	ShowContext   int       // 显示上下文行数
+	CompiledRegex *regexp.Regexp
 }
 
 // SearchResult 搜索结果
 type SearchResult struct {
-	FilePath  string   // 文件路径
-	LineNum   int      // 行号
-	Line      string   // 匹配的行
-	Context   []string // 上下文行
+	FilePath string   // 文件路径
+	LineNum  int      // 行号
+	Line     string   // 匹配的行
+	Context  []string // 上下文行
 }
 
 // Searcher 日志搜索器
 type Searcher struct {
 	options *SearchOptions
 	regex   *regexp.Regexp
+}
+
+type pendingContext struct {
+	result    *SearchResult
+	remaining int
 }
 
 // New 创建搜索器
@@ -43,28 +50,36 @@ func New(options *SearchOptions) (*Searcher, error) {
 
 	// 如果使用正则表达式，编译它
 	if options.UseRegex {
-		flags := ""
-		if !options.CaseSensitive {
-			flags = "(?i)"
+		if options.CompiledRegex != nil {
+			s.regex = options.CompiledRegex
+		} else {
+			flags := ""
+			if !options.CaseSensitive {
+				flags = "(?i)"
+			}
+			regex, err := regexp.Compile(flags + options.Keyword)
+			if err != nil {
+				return nil, fmt.Errorf("正则表达式编译失败: %w", err)
+			}
+			s.regex = regex
 		}
-		regex, err := regexp.Compile(flags + options.Keyword)
-		if err != nil {
-			return nil, fmt.Errorf("正则表达式编译失败: %w", err)
-		}
-		s.regex = regex
 	}
 
 	return s, nil
 }
 
 // Search 执行搜索
-func (s *Searcher) Search() ([]*SearchResult, error) {
+func (s *Searcher) Search(ctx context.Context) ([]*SearchResult, error) {
 	var results []*SearchResult
 
 	// 遍历日志目录
 	err := filepath.Walk(s.options.LogDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 
 		// 跳过目录
@@ -83,7 +98,7 @@ func (s *Searcher) Search() ([]*SearchResult, error) {
 		}
 
 		// 在文件中搜索
-		fileResults, err := s.searchFile(path)
+		fileResults, err := s.searchFile(ctx, path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "搜索文件 %s 失败: %v\n", path, err)
 			return nil // 继续搜索其他文件
@@ -94,6 +109,9 @@ func (s *Searcher) Search() ([]*SearchResult, error) {
 	})
 
 	if err != nil {
+		if ctx.Err() != nil && err == ctx.Err() {
+			return nil, err
+		}
 		return nil, fmt.Errorf("遍历日志目录失败: %w", err)
 	}
 
@@ -101,7 +119,7 @@ func (s *Searcher) Search() ([]*SearchResult, error) {
 }
 
 // searchFile 在单个文件中搜索
-func (s *Searcher) searchFile(filePath string) ([]*SearchResult, error) {
+func (s *Searcher) searchFile(ctx context.Context, filePath string) ([]*SearchResult, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -109,7 +127,8 @@ func (s *Searcher) searchFile(filePath string) ([]*SearchResult, error) {
 	defer file.Close()
 
 	var results []*SearchResult
-	var lines []string // 保存所有行用于上下文
+	prevLines := make([]string, 0, s.options.ShowContext)
+	var pendings []*pendingContext
 
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, 0, 256*1024)
@@ -117,9 +136,14 @@ func (s *Searcher) searchFile(filePath string) ([]*SearchResult, error) {
 
 	lineNum := 0
 	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		lineNum++
 		line := scanner.Text()
-		lines = append(lines, line)
+
+		pendings = s.feedPendingContexts(pendings, line)
 
 		if s.matches(line) {
 			result := &SearchResult{
@@ -128,12 +152,28 @@ func (s *Searcher) searchFile(filePath string) ([]*SearchResult, error) {
 				Line:     line,
 			}
 
-			// 添加上下文
 			if s.options.ShowContext > 0 {
-				result.Context = s.getContext(lines, lineNum-1)
+				contextLines := make([]string, len(prevLines))
+				copy(contextLines, prevLines)
+				contextLines = append(contextLines, line)
+				result.Context = contextLines
+
+				if s.options.ShowContext > 0 {
+					pendings = append(pendings, &pendingContext{
+						result:    result,
+						remaining: s.options.ShowContext,
+					})
+				}
 			}
 
 			results = append(results, result)
+		}
+
+		if s.options.ShowContext > 0 {
+			if len(prevLines) == s.options.ShowContext {
+				prevLines = prevLines[1:]
+			}
+			prevLines = append(prevLines, line)
 		}
 	}
 
@@ -142,6 +182,27 @@ func (s *Searcher) searchFile(filePath string) ([]*SearchResult, error) {
 	}
 
 	return results, nil
+}
+
+func (s *Searcher) feedPendingContexts(pendings []*pendingContext, line string) []*pendingContext {
+	if len(pendings) == 0 {
+		return pendings
+	}
+
+	idx := 0
+	for _, pending := range pendings {
+		if pending.remaining <= 0 {
+			continue
+		}
+		pending.result.Context = append(pending.result.Context, line)
+		pending.remaining--
+		if pending.remaining > 0 {
+			pendings[idx] = pending
+			idx++
+		}
+	}
+
+	return pendings[:idx]
 }
 
 // matches 检查行是否匹配
@@ -160,21 +221,6 @@ func (s *Searcher) matches(line string) bool {
 	}
 
 	return strings.Contains(searchLine, keyword)
-}
-
-// getContext 获取上下文行
-func (s *Searcher) getContext(lines []string, currentIdx int) []string {
-	start := currentIdx - s.options.ShowContext
-	if start < 0 {
-		start = 0
-	}
-
-	end := currentIdx + s.options.ShowContext + 1
-	if end > len(lines) {
-		end = len(lines)
-	}
-
-	return lines[start:end]
 }
 
 // isWithinDateRange 检查日期是否在范围内

@@ -3,6 +3,7 @@ package executor_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -10,9 +11,13 @@ import (
 	"github.com/aliancn/logcmd/internal/executor"
 )
 
+func newTestExecutor(logFile io.Writer) *executor.Executor {
+	return executor.New(logFile, io.Discard, io.Discard)
+}
+
 func TestNew(t *testing.T) {
 	var buf bytes.Buffer
-	exec := executor.New(&buf)
+	exec := newTestExecutor(&buf)
 
 	if exec == nil {
 		t.Fatal("New() 返回了 nil")
@@ -21,7 +26,7 @@ func TestNew(t *testing.T) {
 
 func TestExecute_Success(t *testing.T) {
 	var buf bytes.Buffer
-	exec := executor.New(&buf)
+	exec := newTestExecutor(&buf)
 
 	ctx := context.Background()
 	result, err := exec.Execute(ctx, "echo", "hello", "world")
@@ -71,7 +76,7 @@ func TestExecute_Success(t *testing.T) {
 
 func TestExecute_Failure(t *testing.T) {
 	var buf bytes.Buffer
-	exec := executor.New(&buf)
+	exec := newTestExecutor(&buf)
 
 	ctx := context.Background()
 	// 执行一个会失败的命令
@@ -97,7 +102,7 @@ func TestExecute_Failure(t *testing.T) {
 
 func TestExecute_NonExistentCommand(t *testing.T) {
 	var buf bytes.Buffer
-	exec := executor.New(&buf)
+	exec := newTestExecutor(&buf)
 
 	ctx := context.Background()
 	result, err := exec.Execute(ctx, "nonexistent_command_12345")
@@ -117,7 +122,7 @@ func TestExecute_NonExistentCommand(t *testing.T) {
 
 func TestExecute_WithOutput(t *testing.T) {
 	var buf bytes.Buffer
-	exec := executor.New(&buf)
+	exec := newTestExecutor(&buf)
 
 	ctx := context.Background()
 	testString := "test output message"
@@ -140,7 +145,7 @@ func TestExecute_WithOutput(t *testing.T) {
 
 func TestExecute_WithContext(t *testing.T) {
 	var buf bytes.Buffer
-	exec := executor.New(&buf)
+	exec := newTestExecutor(&buf)
 
 	// 创建一个会超时的上下文
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -163,7 +168,7 @@ func TestExecute_WithContext(t *testing.T) {
 
 func TestWriteMetadata(t *testing.T) {
 	var buf bytes.Buffer
-	exec := executor.New(&buf)
+	exec := newTestExecutor(&buf)
 
 	startTime := time.Now()
 	result := &executor.Result{
@@ -212,7 +217,7 @@ func TestWriteMetadata(t *testing.T) {
 
 func TestWriteMetadataWithNilLogFile(t *testing.T) {
 	// 创建没有日志文件的执行器
-	exec := executor.New(nil)
+	exec := newTestExecutor(nil)
 
 	result := &executor.Result{
 		Command:   "test",
@@ -246,7 +251,7 @@ func TestExecute_MultipleCommands(t *testing.T) {
 	for _, tc := range commands {
 		t.Run(tc.cmd, func(t *testing.T) {
 			var buf bytes.Buffer
-			exec := executor.New(&buf)
+			exec := newTestExecutor(&buf)
 
 			ctx := context.Background()
 			result, err := exec.Execute(ctx, tc.cmd, tc.args...)

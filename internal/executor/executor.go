@@ -30,11 +30,18 @@ type Executor struct {
 }
 
 // New 创建新的执行器
-func New(logFile io.Writer) *Executor {
+func New(logFile io.Writer, stdout io.Writer, stderr io.Writer) *Executor {
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+
 	return &Executor{
 		logFile: logFile,
-		stdout:  os.Stdout,
-		stderr:  os.Stderr,
+		stdout:  stdout,
+		stderr:  stderr,
 	}
 }
 

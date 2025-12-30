@@ -84,7 +84,7 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) error 
 	l.writeHeader(command, args)
 
 	// 创建执行器并执行命令
-	exec := executor.New(l.writer)
+	exec := executor.New(l.writer, os.Stdout, os.Stderr)
 	result, err := exec.Execute(ctx, command, args...)
 
 	// 写入元数据

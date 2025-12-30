@@ -11,6 +11,16 @@ import (
 	"github.com/aliancn/logcmd/internal/search"
 )
 
+func collectResults(t *testing.T, searcher *search.Searcher, ctx context.Context) ([]*search.SearchResult, error) {
+	t.Helper()
+	var results []*search.SearchResult
+	err := searcher.Search(ctx, func(result *search.SearchResult) error {
+		results = append(results, result)
+		return nil
+	})
+	return results, err
+}
+
 func TestNew(t *testing.T) {
 	options := &search.SearchOptions{
 		LogDir:  "/tmp",
@@ -70,7 +80,7 @@ func TestSearchEmptyDirectory(t *testing.T) {
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search(context.Background())
+	results, err := collectResults(t, searcher, context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -105,7 +115,7 @@ Line 5: final line`
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search(context.Background())
+	results, err := collectResults(t, searcher, context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -142,7 +152,10 @@ Line 3: TeSt mixed case`
 		}
 
 		searcher, _ := search.New(options)
-		results, _ := searcher.Search(context.Background())
+		results, err := collectResults(t, searcher, context.Background())
+		if err != nil {
+			t.Fatalf("Search() 失败: %v", err)
+		}
 
 		// 只应该匹配小写的 "test"
 		if len(results) != 1 {
@@ -158,7 +171,10 @@ Line 3: TeSt mixed case`
 		}
 
 		searcher, _ := search.New(options)
-		results, _ := searcher.Search(context.Background())
+		results, err := collectResults(t, searcher, context.Background())
+		if err != nil {
+			t.Fatalf("Search() 失败: %v", err)
+		}
 
 		// 应该匹配所有变体
 		if len(results) != 3 {
@@ -191,7 +207,7 @@ Line 4: testing789`
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search(context.Background())
+	results, err := collectResults(t, searcher, context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -227,7 +243,7 @@ Line 5`
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search(context.Background())
+	results, err := collectResults(t, searcher, context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -280,7 +296,7 @@ func TestSearchOnlyLogFiles(t *testing.T) {
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	results, err := searcher.Search(context.Background())
+	results, err := collectResults(t, searcher, context.Background())
 	if err != nil {
 		t.Fatalf("Search() 失败: %v", err)
 	}
@@ -318,7 +334,10 @@ func TestSearchWithDateRange(t *testing.T) {
 		}
 
 		searcher, _ := search.New(options)
-		results, _ := searcher.Search(context.Background())
+		results, err := collectResults(t, searcher, context.Background())
+		if err != nil {
+			t.Fatalf("Search() 失败: %v", err)
+		}
 
 		// 文件是10天前的，不应该被搜索
 		if len(results) != 0 {
@@ -334,7 +353,10 @@ func TestSearchWithDateRange(t *testing.T) {
 		}
 
 		searcher, _ := search.New(options)
-		results, _ := searcher.Search(context.Background())
+		results, err := collectResults(t, searcher, context.Background())
+		if err != nil {
+			t.Fatalf("Search() 失败: %v", err)
+		}
 
 		// 文件是10天前的，应该被搜索到
 		if len(results) != 1 {
@@ -358,7 +380,10 @@ func TestSearchResultFields(t *testing.T) {
 	}
 
 	searcher, _ := search.New(options)
-	results, _ := searcher.Search(context.Background())
+	results, err := collectResults(t, searcher, context.Background())
+	if err != nil {
+		t.Fatalf("Search() 失败: %v", err)
+	}
 
 	if len(results) != 1 {
 		t.Fatalf("应该找到 1 个结果")
@@ -384,38 +409,6 @@ func TestSearchResultFields(t *testing.T) {
 	}
 }
 
-func TestPrintResults(t *testing.T) {
-	results := []*search.SearchResult{
-		{
-			FilePath: "/path/to/test.log",
-			LineNum:  5,
-			Line:     "test line",
-		},
-	}
-
-	// PrintResults 应该不会 panic
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("PrintResults() panic: %v", r)
-		}
-	}()
-
-	search.PrintResults(results)
-}
-
-func TestPrintResultsEmpty(t *testing.T) {
-	var results []*search.SearchResult
-
-	// PrintResults 应该能处理空结果
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("PrintResults() panic on empty results: %v", r)
-		}
-	}()
-
-	search.PrintResults(results)
-}
-
 func TestSearchNonExistentDirectory(t *testing.T) {
 	options := &search.SearchOptions{
 		LogDir:  "/nonexistent/directory/12345",
@@ -427,7 +420,9 @@ func TestSearchNonExistentDirectory(t *testing.T) {
 		t.Fatalf("New() 失败: %v", err)
 	}
 
-	_, err = searcher.Search(context.Background())
+	err = searcher.Search(context.Background(), func(*search.SearchResult) error {
+		return nil
+	})
 	if err == nil {
 		t.Error("Search() 应该对不存在的目录返回错误")
 	}

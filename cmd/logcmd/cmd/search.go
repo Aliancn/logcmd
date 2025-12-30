@@ -93,12 +93,25 @@ func runSearch(cmd *cobra.Command) error {
 		return fmt.Errorf("创建搜索器失败: %w", err)
 	}
 
-	results, err := searcher.Search(ctx)
+	var count int
+	err = searcher.Search(ctx, func(result *search.SearchResult) error {
+		if count == 0 {
+			fmt.Println("匹配结果:")
+			fmt.Println()
+		}
+		printSearchResult(result)
+		count++
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("搜索失败: %w", err)
 	}
 
-	search.PrintResults(results)
+	if count == 0 {
+		fmt.Println("未找到匹配的日志")
+	} else {
+		fmt.Printf("找到 %d 条匹配记录\n", count)
+	}
 	return nil
 }
 
@@ -176,8 +189,12 @@ func runSearchAllProjects(ctx context.Context, compiled *regexp.Regexp) error {
 					continue
 				}
 
-				res, err := searcher.Search(ctx)
-				resultsCh <- searchJobResult{index: job.index, entry: job.entry, matches: res, err: err}
+				var matches []*search.SearchResult
+				err = searcher.Search(ctx, func(result *search.SearchResult) error {
+					matches = append(matches, result)
+					return nil
+				})
+				resultsCh <- searchJobResult{index: job.index, entry: job.entry, matches: matches, err: err}
 			}
 		}()
 	}
@@ -232,7 +249,9 @@ dispatchLoop:
 
 		if len(result.matches) > 0 {
 			fmt.Printf("  找到 %d 条结果\n", len(result.matches))
-			search.PrintResults(result.matches)
+			for _, match := range result.matches {
+				printSearchResult(match)
+			}
 			totalResults += len(result.matches)
 		} else {
 			fmt.Println("  未找到结果")
@@ -261,4 +280,17 @@ func compileSearchRegex() (*regexp.Regexp, error) {
 		return nil, fmt.Errorf("正则表达式编译失败: %w", err)
 	}
 	return regex, nil
+}
+
+func printSearchResult(result *search.SearchResult) {
+	fmt.Printf("文件: %s:%d\n", result.FilePath, result.LineNum)
+	if len(result.Context) > 0 {
+		fmt.Println("上下文:")
+		for _, line := range result.Context {
+			fmt.Printf("  %s\n", line)
+		}
+	} else {
+		fmt.Printf("  %s\n", result.Line)
+	}
+	fmt.Println()
 }

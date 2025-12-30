@@ -27,6 +27,7 @@ type Executor struct {
 	logFile io.Writer
 	stdout  io.Writer
 	stderr  io.Writer
+	logMu   sync.Mutex
 }
 
 // New 创建新的执行器
@@ -79,13 +80,13 @@ func (e *Executor) Execute(ctx context.Context, command string, args ...string) 
 	// 处理标准输出
 	go func() {
 		defer wg.Done()
-		e.streamOutput(stdoutPipe)
+		e.streamOutput(stdoutPipe, e.stdout)
 	}()
 
 	// 处理标准错误
 	go func() {
 		defer wg.Done()
-		e.streamOutput(stderrPipe)
+		e.streamOutput(stderrPipe, e.stderr)
 	}()
 
 	// 等待输出处理完成
@@ -113,21 +114,48 @@ func (e *Executor) Execute(ctx context.Context, command string, args ...string) 
 }
 
 // streamOutput 流式处理输出，同时写入终端和日志文件
-func (e *Executor) streamOutput(reader io.Reader) {
+func (e *Executor) streamOutput(reader io.Reader, dest io.Writer) {
 	scanner := bufio.NewScanner(reader)
-	// 设置缓冲区大小为256KB，处理大输出行
 	buf := make([]byte, 0, 256*1024)
 	scanner.Buffer(buf, 1024*1024)
 
+	var destWriter *bufio.Writer
+	if dest != nil {
+		destWriter = bufio.NewWriterSize(dest, 64*1024)
+		defer func() {
+			if err := destWriter.Flush(); err != nil {
+				fmt.Fprintf(e.stderr, "刷新输出失败: %v\n", err)
+			}
+		}()
+	}
+
+	var logWriter *bufio.Writer
+	if e.logFile != nil {
+		logWriter = bufio.NewWriterSize(&lockedWriter{w: e.logFile, mu: &e.logMu}, 64*1024)
+		defer func() {
+			if err := logWriter.Flush(); err != nil {
+				fmt.Fprintf(e.stderr, "刷新日志失败: %v\n", err)
+			}
+		}()
+	}
+
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := append([]byte(nil), scanner.Bytes()...)
 
-		// 同时写入终端
-		fmt.Fprintln(e.stdout, line)
+		if destWriter != nil {
+			if _, err := destWriter.Write(line); err != nil {
+				fmt.Fprintf(e.stderr, "写入输出失败: %v\n", err)
+			} else if err := destWriter.WriteByte('\n'); err != nil {
+				fmt.Fprintf(e.stderr, "写入输出失败: %v\n", err)
+			}
+		}
 
-		// 写入日志文件
-		if e.logFile != nil {
-			fmt.Fprintf(e.logFile, "%s\n", line)
+		if logWriter != nil {
+			if _, err := logWriter.Write(line); err != nil {
+				fmt.Fprintf(e.stderr, "写入日志失败: %v\n", err)
+			} else if err := logWriter.WriteByte('\n'); err != nil {
+				fmt.Fprintf(e.stderr, "写入日志失败: %v\n", err)
+			}
 		}
 	}
 
@@ -162,4 +190,15 @@ func (e *Executor) WriteMetadata(result *Result) {
 	)
 
 	fmt.Fprint(e.logFile, metadata)
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

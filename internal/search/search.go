@@ -3,11 +3,11 @@ package search
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aliancn/logcmd/internal/walker"
@@ -35,9 +35,15 @@ type SearchResult struct {
 
 // Searcher 日志搜索器
 type Searcher struct {
-	options *SearchOptions
-	regex   *regexp.Regexp
+	options         *SearchOptions
+	regex           *regexp.Regexp
+	lowerKeyword    string
+	useASCIIMatcher bool
+	asciiKeyword    []byte
 }
+
+// ResultHandler 处理搜索结果
+type ResultHandler func(*SearchResult) error
 
 type pendingContext struct {
 	result    *SearchResult
@@ -65,17 +71,23 @@ func New(options *SearchOptions) (*Searcher, error) {
 			}
 			s.regex = regex
 		}
+	} else if !options.CaseSensitive {
+		lower := strings.ToLower(options.Keyword)
+		s.lowerKeyword = lower
+		if isASCII(lower) {
+			s.useASCIIMatcher = true
+			s.asciiKeyword = []byte(lower)
+		}
 	}
 
 	return s, nil
 }
 
-// Search 执行搜索
-func (s *Searcher) Search(ctx context.Context) ([]*SearchResult, error) {
-	var (
-		results []*SearchResult
-		mu      sync.Mutex
-	)
+// Search 执行搜索，并在每次匹配时调用 handler
+func (s *Searcher) Search(ctx context.Context, handler ResultHandler) error {
+	if handler == nil {
+		return errors.New("handler 不能为空")
+	}
 
 	fileWalker, err := walker.New(walker.Options{
 		Root: s.options.LogDir,
@@ -87,44 +99,35 @@ func (s *Searcher) Search(ctx context.Context) ([]*SearchResult, error) {
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("创建文件遍历器失败: %w", err)
+		return fmt.Errorf("创建文件遍历器失败: %w", err)
 	}
 
 	err = fileWalker.Walk(ctx, func(ctx context.Context, path string, info os.FileInfo) error {
-		fileResults, err := s.searchFile(ctx, path)
-		if err != nil {
+		if err := s.searchFile(ctx, path, handler); err != nil {
 			fmt.Fprintf(os.Stderr, "搜索文件 %s 失败: %v\n", path, err)
 			return nil
 		}
-		if len(fileResults) == 0 {
-			return nil
-		}
-
-		mu.Lock()
-		results = append(results, fileResults...)
-		mu.Unlock()
 		return nil
 	})
 
 	if err != nil {
 		if ctx.Err() != nil && err == ctx.Err() {
-			return nil, err
+			return err
 		}
-		return nil, fmt.Errorf("遍历日志目录失败: %w", err)
+		return fmt.Errorf("遍历日志目录失败: %w", err)
 	}
 
-	return results, nil
+	return nil
 }
 
 // searchFile 在单个文件中搜索
-func (s *Searcher) searchFile(ctx context.Context, filePath string) ([]*SearchResult, error) {
+func (s *Searcher) searchFile(ctx context.Context, filePath string, handler ResultHandler) error {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer file.Close()
 
-	var results []*SearchResult
 	prevLines := make([]string, 0, s.options.ShowContext)
 	var pendings []*pendingContext
 
@@ -135,13 +138,16 @@ func (s *Searcher) searchFile(ctx context.Context, filePath string) ([]*SearchRe
 	lineNum := 0
 	for scanner.Scan() {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 
 		lineNum++
 		line := scanner.Text()
 
-		pendings = s.feedPendingContexts(pendings, line)
+		pendings, err = s.feedPendingContexts(pendings, line, handler)
+		if err != nil {
+			return err
+		}
 
 		if s.matches(line) {
 			result := &SearchResult{
@@ -162,9 +168,11 @@ func (s *Searcher) searchFile(ctx context.Context, filePath string) ([]*SearchRe
 						remaining: s.options.ShowContext,
 					})
 				}
+			} else {
+				if err := handler(result); err != nil {
+					return err
+				}
 			}
-
-			results = append(results, result)
 		}
 
 		if s.options.ShowContext > 0 {
@@ -176,20 +184,27 @@ func (s *Searcher) searchFile(ctx context.Context, filePath string) ([]*SearchRe
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return err
 	}
 
-	return results, nil
+	if err := flushPendingContexts(pendings, handler); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (s *Searcher) feedPendingContexts(pendings []*pendingContext, line string) []*pendingContext {
+func (s *Searcher) feedPendingContexts(pendings []*pendingContext, line string, handler ResultHandler) ([]*pendingContext, error) {
 	if len(pendings) == 0 {
-		return pendings
+		return pendings, nil
 	}
 
 	idx := 0
 	for _, pending := range pendings {
 		if pending.remaining <= 0 {
+			if err := handler(pending.result); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		pending.result.Context = append(pending.result.Context, line)
@@ -197,10 +212,65 @@ func (s *Searcher) feedPendingContexts(pendings []*pendingContext, line string) 
 		if pending.remaining > 0 {
 			pendings[idx] = pending
 			idx++
+			continue
+		}
+		if err := handler(pending.result); err != nil {
+			return nil, err
 		}
 	}
 
-	return pendings[:idx]
+	return pendings[:idx], nil
+}
+
+func flushPendingContexts(pendings []*pendingContext, handler ResultHandler) error {
+	for _, pending := range pendings {
+		if err := handler(pending.result); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func containsLowerASCII(line string, needle []byte) bool {
+	if len(needle) == 0 {
+		return true
+	}
+
+	lineBytes := []byte(line)
+	if len(lineBytes) < len(needle) {
+		return false
+	}
+
+	last := len(lineBytes) - len(needle)
+	for i := 0; i <= last; i++ {
+		match := true
+		for j := 0; j < len(needle); j++ {
+			if toLowerASCII(lineBytes[i+j]) != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > 127 {
+			return false
+		}
+	}
+	return true
+}
+
+func toLowerASCII(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + 32
+	}
+	return b
 }
 
 // matches 检查行是否匹配
@@ -209,16 +279,15 @@ func (s *Searcher) matches(line string) bool {
 		return s.regex.MatchString(line)
 	}
 
-	// 普通字符串匹配
-	searchLine := line
-	keyword := s.options.Keyword
-
-	if !s.options.CaseSensitive {
-		searchLine = strings.ToLower(line)
-		keyword = strings.ToLower(keyword)
+	if s.options.CaseSensitive {
+		return strings.Contains(line, s.options.Keyword)
 	}
 
-	return strings.Contains(searchLine, keyword)
+	if s.useASCIIMatcher {
+		return containsLowerASCII(line, s.asciiKeyword)
+	}
+
+	return strings.Contains(strings.ToLower(line), s.lowerKeyword)
 }
 
 // isWithinDateRange 检查日期是否在范围内
@@ -230,27 +299,4 @@ func (s *Searcher) isWithinDateRange(t time.Time) bool {
 		return false
 	}
 	return true
-}
-
-// PrintResults 打印搜索结果
-func PrintResults(results []*SearchResult) {
-	if len(results) == 0 {
-		fmt.Println("未找到匹配的日志")
-		return
-	}
-
-	fmt.Printf("找到 %d 条匹配记录:\n\n", len(results))
-
-	for _, result := range results {
-		fmt.Printf("文件: %s:%d\n", result.FilePath, result.LineNum)
-		if len(result.Context) > 0 {
-			fmt.Println("上下文:")
-			for _, line := range result.Context {
-				fmt.Printf("  %s\n", line)
-			}
-		} else {
-			fmt.Printf("  %s\n", result.Line)
-		}
-		fmt.Println()
-	}
 }

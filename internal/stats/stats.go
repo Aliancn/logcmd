@@ -2,6 +2,7 @@ package stats
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -158,9 +159,11 @@ func (a *Analyzer) analyzeFile(ctx context.Context, filePath string) error {
 	return nil
 }
 
-func parseLogHeader(ctx context.Context, file *os.File, meta *LogMetadata) error {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return err
+func parseLogHeader(ctx context.Context, file io.Reader, meta *LogMetadata) error {
+	if seeker, ok := file.(io.Seeker); ok {
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
 	}
 
 	scanner := bufio.NewScanner(file)
@@ -218,32 +221,38 @@ func parseLogFooter(ctx context.Context, file *os.File, meta *LogMetadata) error
 		return err
 	}
 
-	scanner := bufio.NewScanner(strings.NewReader(string(buf)))
-	for scanner.Scan() {
-		line := scanner.Text()
+	processFooterBuffer(buf, meta)
+	return nil
+}
 
-		if matches := cmdRegex.FindStringSubmatch(line); matches != nil {
+func processFooterBuffer(buf []byte, meta *LogMetadata) {
+	lines := bytes.Split(buf, []byte{'\n'})
+	for _, line := range lines {
+		lineStr := string(bytes.TrimSpace(line))
+		if len(lineStr) == 0 {
+			continue
+		}
+
+		if matches := cmdRegex.FindStringSubmatch(lineStr); matches != nil {
 			parts := strings.Fields(matches[1])
 			if len(parts) > 0 {
 				meta.Command = parts[0]
 			}
 		}
 
-		if matches := exitCodeRegex.FindStringSubmatch(line); matches != nil {
+		if matches := exitCodeRegex.FindStringSubmatch(lineStr); matches != nil {
 			fmt.Sscanf(matches[1], "%d", &meta.ExitCode)
 		}
 
-		if matches := statusRegex.FindStringSubmatch(line); matches != nil {
+		if matches := statusRegex.FindStringSubmatch(lineStr); matches != nil {
 			meta.Success = matches[1] == "成功"
 		}
 
-		if matches := durationRegex.FindStringSubmatch(line); matches != nil {
+		if matches := durationRegex.FindStringSubmatch(lineStr); matches != nil {
 			duration, _ := time.ParseDuration(strings.ReplaceAll(matches[1], " ", ""))
 			meta.Duration = duration
 		}
 	}
-
-	return scanner.Err()
 }
 
 // updateStats 更新统计数据

@@ -2,8 +2,12 @@
 
 # 变量定义
 BINARY_NAME=logcmd
-INSTALL_PATH=$(GOPATH)/bin
 BUILD_DIR=./bin
+GO_BIN:=$(shell go env GOBIN)
+ifeq ($(GO_BIN),)
+GO_BIN:=$(shell go env GOPATH)/bin
+endif
+INSTALL_PATH?=$(GO_BIN)
 
 # 默认目标
 all: build
@@ -18,9 +22,10 @@ build:
 # 安装到系统
 install: build
 	@echo "正在安装到 $(INSTALL_PATH)..."
-	go install cmd/logcmd/main.go
+	@mkdir -p $(INSTALL_PATH)
+	@install -m 0755 $(BUILD_DIR)/$(BINARY_NAME) $(INSTALL_PATH)/$(BINARY_NAME)
 	@echo "安装完成！"
-	@echo "现在可以直接使用: logcmd <command>"
+	@echo "请确认已将 $(INSTALL_PATH) 加入 PATH 后运行: logcmd <command>"
 
 # 运行测试
 test:

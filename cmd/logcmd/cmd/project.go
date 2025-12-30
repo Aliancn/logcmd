@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/aliancn/logcmd/internal/model"
@@ -70,9 +71,19 @@ func listProjects() error {
 		return nil
 	}
 
-	fmt.Printf("已注册的项目 (共%d个):\n\n", len(entries))
-	fmt.Printf("%-5s %-20s %-45s %-19s %-8s %-10s %s\n", "ID", "项目名称", "路径", "最后执行", "成功率", "命令数", "存在")
-	fmt.Println(strings.Repeat("-", 130))
+	rows := make([]projectRow, 0, len(entries))
+	widths := baseProjectColumnWidths()
+	header := projectRow{
+		ID:            "ID",
+		Name:          "项目名称",
+		Path:          "路径",
+		LastRun:       "最后执行",
+		SuccessRate:   "成功率",
+		TotalCommands: "命令数",
+		Exists:        "存在",
+	}
+	widths.update(header)
+
 	for _, entry := range entries {
 		exists := "✓"
 		if _, err := os.Stat(entry.Path); os.IsNotExist(err) {
@@ -83,17 +94,148 @@ func listProjects() error {
 			lastRun = entry.LastCommandTime.Time.Format("2006-01-02 15:04:05")
 		}
 		name := entry.Name
-		if name == "" {
+		if strings.TrimSpace(name) == "" {
 			name = template.GetProjectName(entry.Path)
 		}
-		successRate := fmt.Sprintf("%.1f%%", entry.GetSuccessRate())
-
-		fmt.Printf("%-5d %-20s %-45s %-19s %-8s %-10d %s\n",
-			entry.ID, name, entry.Path, lastRun, successRate, entry.TotalCommands, exists)
+		row := projectRow{
+			ID:            strconv.Itoa(entry.ID),
+			Name:          name,
+			Path:          entry.Path,
+			LastRun:       lastRun,
+			SuccessRate:   fmt.Sprintf("%.1f%%", entry.GetSuccessRate()),
+			TotalCommands: strconv.Itoa(entry.TotalCommands),
+			Exists:        exists,
+		}
+		widths.update(row)
+		rows = append(rows, row)
 	}
+
+	fmt.Printf("已注册的项目 (共%d个):\n\n", len(entries))
+	printProjectTable(header, rows, widths)
 
 	return nil
 }
+
+func printProjectTable(header projectRow, rows []projectRow, widths columnWidths) {
+	fmt.Println(formatProjectRow(header, widths))
+	separatorWidth := widths.total() + projectColumnSpacing
+	fmt.Println(strings.Repeat("-", separatorWidth))
+	for _, row := range rows {
+		fmt.Println(formatProjectRow(row, widths))
+	}
+}
+
+func formatProjectRow(row projectRow, widths columnWidths) string {
+	cells := []string{
+		padRight(row.ID, widths.ID),
+		padRight(row.Name, widths.Name),
+		padRight(row.Path, widths.Path),
+		padRight(row.LastRun, widths.LastRun),
+		padRight(row.SuccessRate, widths.SuccessRate),
+		padRight(row.TotalCommands, widths.TotalCommands),
+		padRight(row.Exists, widths.Exists),
+	}
+	return strings.Join(cells, " ")
+}
+
+func padRight(text string, width int) string {
+	padding := width - displayWidth(text)
+	if padding <= 0 {
+		return text
+	}
+	return text + strings.Repeat(" ", padding)
+}
+
+func displayWidth(value string) int {
+	width := 0
+	for _, r := range value {
+		width += runeDisplayWidth(r)
+	}
+	return width
+}
+
+func runeDisplayWidth(r rune) int {
+	if r == 0 {
+		return 0
+	}
+	if r < 0x1100 {
+		return 1
+	}
+	switch {
+	case r >= 0x1100 && r <= 0x115f,
+		r == 0x2329 || r == 0x232a,
+		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f,
+		r >= 0xac00 && r <= 0xd7a3,
+		r >= 0xf900 && r <= 0xfaff,
+		r >= 0xfe10 && r <= 0xfe19,
+		r >= 0xfe30 && r <= 0xfe6f,
+		r >= 0xff00 && r <= 0xff60,
+		r >= 0xffe0 && r <= 0xffe6,
+		r >= 0x20000 && r <= 0x2fffd,
+		r >= 0x30000 && r <= 0x3fffd:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func baseProjectColumnWidths() columnWidths {
+	return columnWidths{
+		ID:            5,
+		Name:          20,
+		Path:          45,
+		LastRun:       19,
+		SuccessRate:   8,
+		TotalCommands: 10,
+		Exists:        2,
+	}
+}
+
+type projectRow struct {
+	ID            string
+	Name          string
+	Path          string
+	LastRun       string
+	SuccessRate   string
+	TotalCommands string
+	Exists        string
+}
+
+type columnWidths struct {
+	ID            int
+	Name          int
+	Path          int
+	LastRun       int
+	SuccessRate   int
+	TotalCommands int
+	Exists        int
+}
+
+func (w *columnWidths) update(row projectRow) {
+	w.ID = maxInt(w.ID, displayWidth(row.ID))
+	w.Name = maxInt(w.Name, displayWidth(row.Name))
+	w.Path = maxInt(w.Path, displayWidth(row.Path))
+	w.LastRun = maxInt(w.LastRun, displayWidth(row.LastRun))
+	w.SuccessRate = maxInt(w.SuccessRate, displayWidth(row.SuccessRate))
+	w.TotalCommands = maxInt(w.TotalCommands, displayWidth(row.TotalCommands))
+	w.Exists = maxInt(w.Exists, displayWidth(row.Exists))
+}
+
+func (w columnWidths) total() int {
+	return w.ID + w.Name + w.Path + w.LastRun + w.SuccessRate + w.TotalCommands + w.Exists
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+const (
+	projectColumnCount   = 7
+	projectColumnSpacing = projectColumnCount - 1
+)
 
 func cleanProjects() error {
 	reg, err := registry.New()

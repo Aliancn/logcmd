@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/aliancn/logcmd/internal/walker"
 )
 
 const (
@@ -73,6 +75,7 @@ type LogMetadata struct {
 type Analyzer struct {
 	logDir string
 	stats  *Stats
+	mu     sync.Mutex
 }
 
 // New 创建统计分析器
@@ -90,28 +93,20 @@ func New(logDir string) *Analyzer {
 
 // Analyze 执行统计分析
 func (a *Analyzer) Analyze(ctx context.Context) (*Stats, error) {
-	err := filepath.Walk(a.logDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
+	fileWalker, err := walker.New(walker.Options{
+		Root: a.logDir,
+		FileFilter: func(path string, info os.FileInfo) bool {
+			return strings.HasSuffix(path, ".log")
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("创建文件遍历器失败: %w", err)
+	}
 
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		if info.IsDir() {
-			return nil
-		}
-
-		if !strings.HasSuffix(path, ".log") {
-			return nil
-		}
-
-		// 分析单个日志文件
+	err = fileWalker.Walk(ctx, func(ctx context.Context, path string, info os.FileInfo) error {
 		if err := a.analyzeFile(ctx, path); err != nil {
 			fmt.Fprintf(os.Stderr, "分析文件 %s 失败: %v\n", path, err)
 		}
-
 		return nil
 	})
 
@@ -253,6 +248,9 @@ func parseLogFooter(ctx context.Context, file *os.File, meta *LogMetadata) error
 
 // updateStats 更新统计数据
 func (a *Analyzer) updateStats(meta *LogMetadata) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	a.stats.TotalCommands++
 
 	if meta.Success {

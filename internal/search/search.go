@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/aliancn/logcmd/internal/walker"
 )
 
 // SearchOptions 搜索选项
@@ -70,41 +72,37 @@ func New(options *SearchOptions) (*Searcher, error) {
 
 // Search 执行搜索
 func (s *Searcher) Search(ctx context.Context) ([]*SearchResult, error) {
-	var results []*SearchResult
+	var (
+		results []*SearchResult
+		mu      sync.Mutex
+	)
 
-	// 遍历日志目录
-	err := filepath.Walk(s.options.LogDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
+	fileWalker, err := walker.New(walker.Options{
+		Root: s.options.LogDir,
+		FileFilter: func(path string, info os.FileInfo) bool {
+			if !strings.HasSuffix(path, ".log") {
+				return false
+			}
+			return s.isWithinDateRange(info.ModTime())
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("创建文件遍历器失败: %w", err)
+	}
 
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		// 跳过目录
-		if info.IsDir() {
-			return nil
-		}
-
-		// 只处理.log文件
-		if !strings.HasSuffix(path, ".log") {
-			return nil
-		}
-
-		// 检查日期范围
-		if !s.isWithinDateRange(info.ModTime()) {
-			return nil
-		}
-
-		// 在文件中搜索
+	err = fileWalker.Walk(ctx, func(ctx context.Context, path string, info os.FileInfo) error {
 		fileResults, err := s.searchFile(ctx, path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "搜索文件 %s 失败: %v\n", path, err)
-			return nil // 继续搜索其他文件
+			return nil
+		}
+		if len(fileResults) == 0 {
+			return nil
 		}
 
+		mu.Lock()
 		results = append(results, fileResults...)
+		mu.Unlock()
 		return nil
 	})
 

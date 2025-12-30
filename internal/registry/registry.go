@@ -366,11 +366,6 @@ func (r *Registry) Delete(idOrPath string) error {
 		return fmt.Errorf("未找到项目: %s", idOrPath)
 	}
 
-	// 删除日志目录，不存在时忽略
-	if err := os.RemoveAll(project.Path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("删除项目目录失败: %w", err)
-	}
-
 	return nil
 }
 

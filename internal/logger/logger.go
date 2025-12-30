@@ -5,32 +5,43 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/aliancn/logcmd/internal/config"
 	"github.com/aliancn/logcmd/internal/executor"
-	"github.com/aliancn/logcmd/internal/history"
 	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/registry"
-	"github.com/aliancn/logcmd/internal/stats"
 )
 
 // Logger 日志记录器
 type Logger struct {
-	config *config.Config
-	file   *os.File
-	writer *bufio.Writer
+	config       *config.Config
+	repo         RunRepository
+	statsUpdater ProjectStatsUpdater
+	file         *os.File
+	writer       *bufio.Writer
+}
+
+// RunRepository 抽象运行结果的持久化能力
+type RunRepository interface {
+	RegisterProject(path string) (*model.Project, error)
+	RecordRun(project *model.Project, result *executor.Result, logFilePath string) error
+}
+
+// ProjectStatsUpdater 负责项目级别的统计更新
+type ProjectStatsUpdater interface {
+	UpdateProjectStats(projectID int, command string, success bool, duration time.Duration) error
 }
 
 // New 创建新的日志记录器
-func New(cfg *config.Config) (*Logger, error) {
+func New(cfg *config.Config, repo RunRepository, statsUpdater ProjectStatsUpdater) (*Logger, error) {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
 
 	return &Logger{
-		config: cfg,
+		config:       cfg,
+		repo:         repo,
+		statsUpdater: statsUpdater,
 	}, nil
 }
 
@@ -47,7 +58,13 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) error 
 	}
 
 	// 自动注册项目（如果尚未注册）
-	project := registerProject(l.config.LogDir)
+	var project *model.Project
+	if l.repo != nil {
+		project, err = l.repo.RegisterProject(l.config.LogDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "注册项目失败: %v\n", err)
+		}
+	}
 
 	// 打开日志文件
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -73,8 +90,16 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) error 
 	// 写入元数据
 	if result != nil {
 		exec.WriteMetadata(result)
-		updateProjectStats(project, result)
-		persistCommandHistory(project, result, logPath)
+		if project != nil && l.statsUpdater != nil {
+			if err := l.statsUpdater.UpdateProjectStats(project.ID, result.Command, result.Success, result.Duration); err != nil {
+				fmt.Fprintf(os.Stderr, "更新项目统计失败: %v\n", err)
+			}
+		}
+		if project != nil && l.repo != nil {
+			if err := l.repo.RecordRun(project, result, logPath); err != nil {
+				fmt.Fprintf(os.Stderr, "记录命令历史失败: %v\n", err)
+			}
+		}
 	}
 
 	// 刷新缓冲区
@@ -91,106 +116,6 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) error 
 	}
 
 	return nil
-}
-
-// registerProject 自动注册项目到全局数据库
-func registerProject(logDir string) *model.Project {
-	reg, err := registry.New()
-	if err != nil {
-		return nil
-	}
-	defer reg.Close()
-
-	project, err := reg.Register(logDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "注册项目失败: %v\n", err)
-		return nil
-	}
-
-	return project
-}
-
-// updateProjectStats 根据执行结果更新项目级统计
-func updateProjectStats(project *model.Project, result *executor.Result) {
-	if project == nil || result == nil {
-		return
-	}
-
-	reg, err := registry.New()
-	if err != nil {
-		return
-	}
-	defer reg.Close()
-
-	if err := reg.UpdateStats(project.ID, result.Command, result.Success, result.Duration); err != nil {
-		fmt.Fprintf(os.Stderr, "更新项目统计失败: %v\n", err)
-	}
-}
-
-// persistCommandHistory 将执行记录写入数据库并刷新统计缓存。
-func persistCommandHistory(project *model.Project, result *executor.Result, logFilePath string) {
-	if project == nil || result == nil {
-		return
-	}
-
-	reg, err := registry.New()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "初始化命令历史存储失败: %v\n", err)
-		return
-	}
-	defer reg.Close()
-
-	db := reg.GetDB()
-	historyManager := history.NewManager(db)
-	statsManager := stats.NewCacheManager(db)
-
-	logDate := result.StartTime.Format("2006-01-02")
-	if logDate == "" {
-		logDate = time.Now().Format("2006-01-02")
-	}
-
-	record := &model.CommandHistory{
-		ProjectID:        project.ID,
-		Command:          buildCommandString(result.Command, result.Args),
-		CommandArgs:      result.Args,
-		StartTime:        result.StartTime,
-		EndTime:          result.EndTime,
-		DurationMs:       result.Duration.Milliseconds(),
-		ExitCode:         result.ExitCode,
-		Status:           map[bool]string{true: "success", false: "failed"}[result.Success],
-		LogFilePath:      logFilePath,
-		LogDate:          logDate,
-		HasError:         !result.Success,
-		WorkingDirectory: getWorkingDirectory(),
-		CreatedAt:        time.Now(),
-	}
-
-	if err := historyManager.Record(record); err != nil {
-		fmt.Fprintf(os.Stderr, "记录命令历史失败: %v\n", err)
-		return
-	}
-
-	if err := statsManager.GenerateForDate(project.ID, logDate); err != nil {
-		fmt.Fprintf(os.Stderr, "刷新统计缓存失败: %v\n", err)
-	}
-}
-
-func buildCommandString(command string, args []string) string {
-	parts := []string{}
-	if command != "" {
-		parts = append(parts, command)
-	}
-	if len(args) > 0 {
-		parts = append(parts, args...)
-	}
-	return strings.Join(parts, " ")
-}
-
-func getWorkingDirectory() string {
-	if wd, err := os.Getwd(); err == nil {
-		return wd
-	}
-	return ""
 }
 
 // writeHeader 写入日志头部信息

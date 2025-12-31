@@ -37,8 +37,7 @@ func DefaultTemplate() *LogNameTemplate {
 		Separator: "_",
 		Elements: []NameElement{
 			{
-				Type:   ElementTypeTime,
-				Config: map[string]string{"format": "20060102_150405"},
+				Type: ElementTypeTime,
 			},
 		},
 	}
@@ -106,7 +105,7 @@ func (t *LogNameTemplate) Save() error {
 }
 
 // GenerateLogName 根据模板生成日志文件名
-func (t *LogNameTemplate) GenerateLogName(command string, args []string, projectName string, timezone *time.Location) string {
+func (t *LogNameTemplate) GenerateLogName(command string, args []string, projectName string, timezone *time.Location, timeFormat string) string {
 	tz := timezone
 	if tz == nil {
 		tz = time.Local
@@ -124,11 +123,7 @@ func (t *LogNameTemplate) GenerateLogName(command string, args []string, project
 			part = sanitizeFilename(command)
 		case ElementTypeTime:
 			// 使用时间
-			format := element.Config["format"]
-			if format == "" {
-				format = "20060102_150405"
-			}
-			part = now.Format(format)
+			part = now.Format(timeFormat)
 		case ElementTypeProject:
 			// 使用项目名称
 			part = sanitizeFilename(projectName)

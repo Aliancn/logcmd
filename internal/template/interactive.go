@@ -73,9 +73,7 @@ func ConfigureInteractive() error {
 			fmt.Println("当前元素顺序：")
 			for i, elem := range newTemplate.Elements {
 				fmt.Printf("  %d. %s", i+1, elem.Type)
-				if elem.Type == ElementTypeTime {
-					fmt.Printf(" (格式: %s)", elem.Config["format"])
-				} else if elem.Type == ElementTypeCustom {
+				if elem.Type == ElementTypeCustom {
 					fmt.Printf(" (文本: %s)", elem.Config["text"])
 				}
 				fmt.Println()
@@ -126,7 +124,7 @@ done:
 
 	// 预览示例
 	fmt.Println("=== 文件名预览 ===")
-	exampleName := newTemplate.GenerateLogName("npm", []string{"test"}, "myproject", nil)
+	exampleName := newTemplate.GenerateLogName("npm", []string{"test"}, "myproject", nil, "20060102_150405")
 	fmt.Printf("示例文件名: %s\n", exampleName)
 	fmt.Println()
 
@@ -172,17 +170,7 @@ func addElement(reader *bufio.Reader, template *LogNameTemplate) error {
 		fmt.Println("已添加：命令名称")
 	case "2":
 		element.Type = ElementTypeTime
-		fmt.Println("时间格式提示：使用 Go 的时间布局 20060102_150405 来定义输出样式")
-		fmt.Println("示例：20060102_150405 => 20240115_090301，2006 表示年份，01 表示月份，02 表示日期")
-		fmt.Println("常用片段：2006(年) 01(月) 02(日) 15(24小时) 04(分) 05(秒)")
-		fmt.Print("输入时间格式（默认: 20060102_150405）: ")
-		format, _ := reader.ReadString('\n')
-		format = strings.TrimSpace(format)
-		if format == "" {
-			format = "20060102_150405"
-		}
-		element.Config["format"] = format
-		fmt.Printf("已添加：时间戳（格式: %s）\n", format)
+		fmt.Println("已添加：时间戳（格式由全局/局部配置控制）")
 	case "3":
 		element.Type = ElementTypeProject
 		fmt.Println("已添加：项目名称")
@@ -285,9 +273,7 @@ func printTemplate(template *LogNameTemplate) {
 	} else {
 		for i, elem := range template.Elements {
 			fmt.Printf("  %d. %s", i+1, elem.Type)
-			if elem.Type == ElementTypeTime {
-				fmt.Printf(" (格式: %s)", elem.Config["format"])
-			} else if elem.Type == ElementTypeCustom {
+			if elem.Type == ElementTypeCustom {
 				fmt.Printf(" (文本: %s)", elem.Config["text"])
 			}
 			fmt.Println()

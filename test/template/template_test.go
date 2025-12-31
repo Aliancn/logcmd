@@ -63,7 +63,7 @@ func TestGenerateLogName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filename := tmpl.GenerateLogName(tt.command, tt.args, tt.projectName, tz)
+			filename := tmpl.GenerateLogName(tt.command, tt.args, tt.projectName, tz, "20060102_150405")
 
 			if filename == "" {
 				t.Error("生成的文件名不应为空")
@@ -100,7 +100,7 @@ func TestGenerateLogNameWithCustomTemplate(t *testing.T) {
 				Separator: "_",
 				Elements: []template.NameElement{
 					{Type: template.ElementTypeCommand},
-					{Type: template.ElementTypeTime, Config: map[string]string{"format": "20060102"}},
+					{Type: template.ElementTypeTime},
 				},
 			},
 			command: "test",
@@ -115,7 +115,7 @@ func TestGenerateLogNameWithCustomTemplate(t *testing.T) {
 				Separator: "-",
 				Elements: []template.NameElement{
 					{Type: template.ElementTypeProject},
-					{Type: template.ElementTypeTime, Config: map[string]string{"format": "20060102"}},
+					{Type: template.ElementTypeTime},
 				},
 			},
 			command: "test",
@@ -142,7 +142,7 @@ func TestGenerateLogNameWithCustomTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filename := tt.template.GenerateLogName(tt.command, []string{}, tt.project, tz)
+			filename := tt.template.GenerateLogName(tt.command, []string{}, tt.project, tz, "20060102_150405")
 
 			if !tt.validate(filename) {
 				t.Errorf("生成的文件名不符合预期: %s", filename)
@@ -167,7 +167,7 @@ func TestSaveAndLoad(t *testing.T) {
 		Elements: []template.NameElement{
 			{Type: template.ElementTypeProject},
 			{Type: template.ElementTypeCommand},
-			{Type: template.ElementTypeTime, Config: map[string]string{"format": "20060102_150405"}},
+			{Type: template.ElementTypeTime},
 		},
 	}
 
@@ -297,7 +297,7 @@ func TestFilenameCharacterSanitization(t *testing.T) {
 
 	for _, cmd := range unsafeCommands {
 		t.Run("清理不安全字符: "+cmd, func(t *testing.T) {
-			filename := tmpl.GenerateLogName(cmd, []string{}, "project", tz)
+			filename := tmpl.GenerateLogName(cmd, []string{}, "project", tz, "20060102_150405")
 
 			// 验证所有不安全字符都被替换
 			unsafeChars := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}

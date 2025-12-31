@@ -31,7 +31,10 @@ func init() {
 }
 
 func runCommand(cmd *cobra.Command, args []string) error {
-	cfg := config.DefaultConfig()
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("加载配置失败: %w", err)
+	}
 	if logDirFlag != "" {
 		cfg.LogDir = logDirFlag
 	}

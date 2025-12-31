@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aliancn/logcmd/internal/config"
+	"github.com/aliancn/logcmd/internal/template"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -24,11 +25,9 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("TimeZone 不应为 nil")
 	}
 
-	// 验证时区是否为东八区
-	_, offset := time.Now().In(cfg.TimeZone).Zone()
-	expectedOffset := 8 * 3600 // 东八区偏移量（秒）
-	if offset != expectedOffset {
-		t.Errorf("时区偏移量不正确: got %d, want %d", offset, expectedOffset)
+	// 验证默认时区跟随系统本地配置
+	if cfg.TimeZone.String() != time.Local.String() {
+		t.Errorf("默认时区应为本地时区: got %s, want %s", cfg.TimeZone, time.Local)
 	}
 
 	if cfg.BufferSize <= 0 {
@@ -109,6 +108,50 @@ func TestGetLogFilePathWithDifferentCommands(t *testing.T) {
 	}
 }
 
+func TestGetLogFilePathGeneratesUniqueNames(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+
+	// 配置模板为固定文件名，确保命名冲突
+	customTemplate := &template.LogNameTemplate{
+		Separator: "_",
+		Elements: []template.NameElement{
+			{Type: template.ElementTypeCustom, Config: map[string]string{"text": "fixed"}},
+		},
+	}
+	if err := customTemplate.Save(); err != nil {
+		t.Fatalf("保存模板失败: %v", err)
+	}
+
+	cfg := &config.Config{
+		LogDir:      filepath.Join(tempDir, "logs"),
+		TimeZone:    time.UTC,
+		Command:     "test",
+		CommandArgs: []string{},
+	}
+
+	path1, err := cfg.GetLogFilePath()
+	if err != nil {
+		t.Fatalf("第一次生成日志路径失败: %v", err)
+	}
+
+	// 创建文件模拟一次执行
+	if err := os.MkdirAll(filepath.Dir(path1), 0755); err != nil {
+		t.Fatalf("创建目录失败: %v", err)
+	}
+	if err := os.WriteFile(path1, []byte("log"), 0644); err != nil {
+		t.Fatalf("写入日志文件失败: %v", err)
+	}
+
+	path2, err := cfg.GetLogFilePath()
+	if err != nil {
+		t.Fatalf("第二次生成日志路径失败: %v", err)
+	}
+
+	if path1 == path2 {
+		t.Errorf("应该生成唯一的日志文件路径，但得到相同路径: %s", path1)
+	}
+}
 func TestConfigWithNilTimeZone(t *testing.T) {
 	tempDir := t.TempDir()
 

@@ -105,15 +105,15 @@ my-project/
 └── tests/
 
 # 在任何子目录执行命令，都使用项目根的 .logcmd
-cd my-project/src && logcmd go build    # → my-project/.logcmd/
-cd my-project/tests && logcmd go test   # → my-project/.logcmd/
+cd my-project/src && logcmd run go build    # → my-project/.logcmd/
+cd my-project/tests && logcmd run go test   # → my-project/.logcmd/
 
 # 场景 2: 独立目录
 cd /tmp
-logcmd echo "test"                       # → /tmp/.logcmd/
+logcmd run echo "test"                   # → /tmp/.logcmd/
 
 # 场景 3: 手动指定
-logcmd -dir ./custom-logs npm test       # → ./custom-logs/
+logcmd -dir ./custom-logs run npm test   # → ./custom-logs/
 ```
 
 **优势**：
@@ -125,16 +125,16 @@ logcmd -dir ./custom-logs npm test       # → ./custom-logs/
 
 ```bash
 # 基本用法（自动查找或创建 .logcmd）
-logcmd ls -la
+logcmd run ls -la
 
 # 在项目根目录初始化（可选）
 mkdir .logcmd  # 手动创建，子目录会自动使用
 
 # 指定日志目录
-logcmd -dir ./mylogs npm test
+logcmd -dir ./mylogs run npm test
 
 # 执行复杂命令
-logcmd python train.py --epochs 100
+logcmd run python train.py --epochs 100
 ```
 
 日志文件格式：`.logcmd/YYYY-MM-DD/log_YYYYMMDD_HHMMSS.log`
@@ -188,7 +188,7 @@ logcmd -stats -all
 
 ```bash
 # 首次执行，自动创建并注册项目
-logcmd npm test
+logcmd run npm test
 # 输出: 正在记录日志到: .logcmd/2024-01-15/log_20240115_143052.log
 ```
 
@@ -262,7 +262,7 @@ logcmd stats -all
 ### 示例 1: 记录构建过程
 
 ```bash
-logcmd make build
+logcmd run make build
 ```
 
 输出：
@@ -298,7 +298,7 @@ logcmd search -keyword "error" -regex -context 2
 ```bash
 # 场景1：在新项目中首次使用（自动注册）
 cd ~/my-project
-logcmd npm test
+logcmd run npm test
 # 输出: 正在记录日志到: .logcmd/2024-01-15/log_20240115_143052.log
 # 项目自动注册到全局数据库
 
@@ -487,7 +487,7 @@ logcmd/
 
 - **语言**: Go 1.21+
 - **数据库**: SQLite3 (github.com/mattn/go-sqlite3)
-- **时区**: 默认使用东八区（Asia/Shanghai）
+- **时区**: 默认跟随系统本地时区（`time.Local`）
 - **并发**: 使用 goroutine 和 WaitGroup
 - **I/O**: bufio 缓冲、io.MultiWriter 多路输出
 

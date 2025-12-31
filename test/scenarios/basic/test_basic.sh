@@ -19,7 +19,7 @@ test_simple_command_execution() {
     mkdir -p .logcmd
 
     # 执行命令
-    assert_success run_logcmd echo "Hello, LogCmd!"
+    assert_success run_logcmd run echo "Hello, LogCmd!"
 
     # 验证日志目录存在
     assert_dir_exists ".logcmd"
@@ -51,7 +51,7 @@ test_failed_command() {
     mkdir -p .logcmd
 
     # 执行会失败的命令（期望返回非零）
-    run_logcmd false || true
+    run_logcmd run false || true
 
     # 即使命令失败，日志也应该被创建
     local log_file=$(get_latest_log ".logcmd")
@@ -75,7 +75,7 @@ test_command_with_args() {
     mkdir -p .logcmd
 
     # 执行带多个参数的命令
-    assert_success run_logcmd echo "arg1" "arg2" "arg3"
+    assert_success run_logcmd run echo "arg1" "arg2" "arg3"
 
     local log_file=$(get_latest_log ".logcmd")
     assert_file_exists "$log_file"
@@ -102,7 +102,7 @@ test_subdirectory_execution() {
 
     # 在子目录中执行命令
     cd subdir/nested
-    assert_success run_logcmd pwd
+    assert_success run_logcmd run pwd
 
     # 日志应该在项目根目录的 .logcmd 中
     local log_file=$(get_latest_log "$project_dir/.logcmd")
@@ -120,7 +120,7 @@ test_long_running_command() {
     mkdir -p .logcmd
 
     # 执行需要一定时间的命令
-    assert_success run_logcmd sleep 0.5
+    assert_success run_logcmd run sleep 0.5
 
     local log_file=$(get_latest_log ".logcmd")
     assert_file_exists "$log_file"
@@ -143,11 +143,11 @@ test_multiple_executions() {
     mkdir -p .logcmd
 
     # 执行多次，每次间隔一下确保时间戳不同
-    assert_success run_logcmd echo "execution 1"
+    assert_success run_logcmd run echo "execution 1"
     sleep 0.1
-    assert_success run_logcmd echo "execution 2"
+    assert_success run_logcmd run echo "execution 2"
     sleep 0.1
-    assert_success run_logcmd echo "execution 3"
+    assert_success run_logcmd run echo "execution 3"
 
     # 验证生成了多个日志文件
     local log_count=$(find ".logcmd" -name "*.log" -type f | wc -l | tr -d ' ')
@@ -173,7 +173,7 @@ test_output_capture() {
     mkdir -p .logcmd
 
     # 执行有标准输出和错误输出的命令
-    run_logcmd sh -c 'echo "stdout message"; echo "stderr message" >&2'
+    run_logcmd run sh -c 'echo "stdout message"; echo "stderr message" >&2'
 
     local log_file=$(get_latest_log ".logcmd")
     assert_file_exists "$log_file"

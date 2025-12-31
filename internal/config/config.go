@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aliancn/logcmd/internal/template"
@@ -11,7 +14,7 @@ import (
 // Config 定义日志配置
 type Config struct {
 	LogDir       string         // 日志根目录
-	TimeZone     *time.Location // 时区（默认东八区）
+	TimeZone     *time.Location // 时区（默认本地时区）
 	BufferSize   int            // 缓冲区大小
 	AutoCompress bool           // 是否自动压缩
 	Command      string         // 当前执行的命令
@@ -20,8 +23,8 @@ type Config struct {
 
 // DefaultConfig 返回默认配置
 func DefaultConfig() *Config {
-	// 东八区时间
-	tz, _ := time.LoadLocation("Asia/Shanghai")
+	// 使用系统本地时区，保证与运行环境一致
+	tz := time.Local
 
 	// 查找合适的日志目录
 	logDir := findLogDir()
@@ -119,5 +122,37 @@ func (c *Config) GetLogFilePath() (string, error) {
 	// 使用模板生成文件名
 	filename := tmpl.GenerateLogName(c.Command, c.CommandArgs, projectName, c.TimeZone)
 
-	return filepath.Join(dateDir, filename), nil
+	logPath, err := ensureUniqueLogPath(dateDir, filename)
+	if err != nil {
+		return "", err
+	}
+
+	return logPath, nil
+}
+
+// ensureUniqueLogPath 如果同名日志已存在，则在文件名后添加序号，确保命名唯一
+func ensureUniqueLogPath(dir, filename string) (string, error) {
+	ext := filepath.Ext(filename)
+	base := strings.TrimSuffix(filename, ext)
+
+	candidate := filepath.Join(dir, filename)
+	if _, err := os.Stat(candidate); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return candidate, nil
+		}
+		return "", fmt.Errorf("检查日志文件失败: %w", err)
+	}
+
+	for i := 1; i < 10000; i++ {
+		newName := fmt.Sprintf("%s_%d%s", base, i, ext)
+		candidate = filepath.Join(dir, newName)
+		if _, err := os.Stat(candidate); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return candidate, nil
+			}
+			return "", fmt.Errorf("检查日志文件失败: %w", err)
+		}
+	}
+
+	return "", fmt.Errorf("无法生成唯一日志文件: %s/%s", dir, filename)
 }

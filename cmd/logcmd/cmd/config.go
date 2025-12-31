@@ -7,12 +7,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var templateCmd = &cobra.Command{
-	Use:   "template",
-	Short: "配置模板",
+var configCmd = &cobra.Command{
+	Use:   "config",
+	Short: "配置日志相关选项",
 }
 
-var templateLogNameCmd = &cobra.Command{
+var configLogNameCmd = &cobra.Command{
 	Use:   "logname",
 	Short: "交互式配置日志命名模板",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -24,6 +24,6 @@ var templateLogNameCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(templateCmd)
-	templateCmd.AddCommand(templateLogNameCmd)
+	rootCmd.AddCommand(configCmd)
+	configCmd.AddCommand(configLogNameCmd)
 }

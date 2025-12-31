@@ -58,7 +58,7 @@
 - [ ] **Shell钩子/别名集成**
     - **需求**: 某些关键命令（如 `make`, `mvn`, `npm install`）用户可能忘记加 `logcmd` 前缀。
     - **功能**: 提供 helper 脚本，允许用户设置 alias，自动拦截特定命令并记录。
-    - **示例**: `alias make="logcmd make"`。
+        - **示例**: `alias make="logcmd run make"`。
 
 ## 待讨论特性 (Ideas Pool)
 

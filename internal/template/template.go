@@ -107,6 +107,12 @@ func (t *LogNameTemplate) Save() error {
 
 // GenerateLogName 根据模板生成日志文件名
 func (t *LogNameTemplate) GenerateLogName(command string, args []string, projectName string, timezone *time.Location) string {
+	tz := timezone
+	if tz == nil {
+		tz = time.Local
+	}
+	now := time.Now().In(tz)
+
 	var parts []string
 
 	for _, element := range t.Elements {
@@ -122,7 +128,7 @@ func (t *LogNameTemplate) GenerateLogName(command string, args []string, project
 			if format == "" {
 				format = "20060102_150405"
 			}
-			part = time.Now().In(timezone).Format(format)
+			part = now.Format(format)
 		case ElementTypeProject:
 			// 使用项目名称
 			part = sanitizeFilename(projectName)
@@ -138,7 +144,7 @@ func (t *LogNameTemplate) GenerateLogName(command string, args []string, project
 
 	// 如果没有任何元素，使用默认命名
 	if len(parts) == 0 {
-		return time.Now().In(timezone).Format("log_20060102_150405.log")
+		return now.Format("log_20060102_150405.log")
 	}
 
 	return strings.Join(parts, t.Separator) + ".log"

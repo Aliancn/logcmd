@@ -65,7 +65,7 @@ make test-all
 ## 常用断言
 
 ```bash
-assert_success run_logcmd echo "test"        # 命令成功
+assert_success run_logcmd run echo "test"    # 命令成功
 assert_file_exists "/path/to/file"           # 文件存在
 assert_dir_exists "/path/to/dir"             # 目录存在
 assert_contains "$output" "expected text"    # 包含文本

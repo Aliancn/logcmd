@@ -30,7 +30,7 @@ test_small_output_baseline() {
 
     # 生成100行输出
     local start_time=$(get_timestamp_ms)
-    run_logcmd seq 1 100 >/dev/null 2>&1
+    run_logcmd run seq 1 100 >/dev/null 2>&1
     local end_time=$(get_timestamp_ms)
     local duration=$((end_time - start_time))
 
@@ -59,7 +59,7 @@ test_medium_output_performance() {
 
     # 生成1000行输出
     local start_time=$(get_timestamp_ms)
-    run_logcmd seq 1 1000 >/dev/null 2>&1
+    run_logcmd run seq 1 1000 >/dev/null 2>&1
     local end_time=$(get_timestamp_ms)
     local duration=$((end_time - start_time))
 
@@ -89,7 +89,7 @@ test_large_output_performance() {
 
     # 生成10000行输出
     local start_time=$(get_timestamp_ms)
-    run_logcmd seq 1 10000 >/dev/null 2>&1
+    run_logcmd run seq 1 10000 >/dev/null 2>&1
     local end_time=$(get_timestamp_ms)
     local duration=$((end_time - start_time))
 
@@ -118,9 +118,9 @@ test_huge_output_performance() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 生成100000行输出
-    echo -e "${YELLOW}  警告: 这将生成约100MB的日志文件,可能需要数秒时间${NC}"
+    echo -e "${YELLOW}  提示: 这将生成约0.6MB的日志文件,主要用于验证吞吐表现${NC}"
     local start_time=$(get_timestamp_ms)
-    run_logcmd seq 1 100000 >/dev/null 2>&1
+    run_logcmd run seq 1 100000 >/dev/null 2>&1
     local end_time=$(get_timestamp_ms)
     local duration=$((end_time - start_time))
 
@@ -131,7 +131,7 @@ test_huge_output_performance() {
     TESTS_RUN=$((TESTS_RUN + 1))
     if [[ -f "$log_file" ]]; then
         local file_size=$(stat -f%z "$log_file" 2>/dev/null || stat -c%s "$log_file" 2>/dev/null)
-        local file_size_mb=$((file_size / 1024 / 1024))
+        local file_size_mb=$(awk "BEGIN { printf \"%.2f\", $file_size / 1024 / 1024 }")
         TESTS_PASSED=$((TESTS_PASSED + 1))
         echo -e "${GREEN}  ✓ PASS: 超大量输出完成 (${duration}ms, 文件大小: ${file_size_mb}MB)${NC}"
     else
@@ -155,7 +155,7 @@ test_long_line_output() {
 
     for i in {1..100}; do
         echo "$long_string"
-    done | run_logcmd cat >/dev/null 2>&1
+    done | run_logcmd run cat >/dev/null 2>&1
 
     local end_time=$(get_timestamp_ms)
     local duration=$((end_time - start_time))
@@ -186,7 +186,7 @@ test_mixed_output() {
 
     # 生成混合输出(stdout和stderr)
     local start_time=$(get_timestamp_ms)
-    run_logcmd bash -c 'for i in {1..500}; do echo "stdout line $i"; echo "stderr line $i" >&2; done' >/dev/null 2>&1
+    run_logcmd run bash -c 'for i in {1..500}; do echo "stdout line $i"; echo "stderr line $i" >&2; done' >/dev/null 2>&1
     local end_time=$(get_timestamp_ms)
     local duration=$((end_time - start_time))
 
@@ -225,7 +225,7 @@ test_rapid_commands() {
     # 快速连续执行10个命令
     local start_time=$(get_timestamp_ms)
     for i in {1..10}; do
-        run_logcmd seq 1 100 >/dev/null 2>&1
+        run_logcmd run seq 1 100 >/dev/null 2>&1
     done
     local end_time=$(get_timestamp_ms)
     local duration=$((end_time - start_time))
@@ -262,7 +262,7 @@ test_performance_regression() {
     local times=()
     for run in {1..3}; do
         local start_time=$(get_timestamp_ms)
-        run_logcmd seq 1 1000 >/dev/null 2>&1
+        run_logcmd run seq 1 1000 >/dev/null 2>&1
         local end_time=$(get_timestamp_ms)
         local duration=$((end_time - start_time))
         times+=($duration)

@@ -131,7 +131,7 @@ assert_equals <actual> <expected> # 断言相等
 init_test_env()                   # 初始化测试环境
 cleanup_test_env()                # 清理测试环境
 create_test_project <name>        # 创建测试项目
-run_logcmd <args>                 # 运行 logcmd 命令
+run_logcmd <args>                 # 运行 logcmd 命令（执行外部命令请写成 run_logcmd run <command>）
 get_latest_log <dir>              # 获取最新日志文件
 wait_for_file <file> [timeout]    # 等待文件创建
 ```
@@ -167,7 +167,7 @@ test_my_feature() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行测试
-    assert_success run_logcmd echo "test"
+    assert_success run_logcmd run echo "test"
 
     # 验证结果
     local log_file=$(get_latest_log ".logcmd")

@@ -15,7 +15,7 @@ test_default_template() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 使用默认模板执行命令
-    run_logcmd echo "default template test" >/dev/null 2>&1
+    run_logcmd run echo "default template test" >/dev/null 2>&1
 
     # 验证日志文件被创建
     local log_file=$(get_latest_log ".logcmd")
@@ -41,7 +41,7 @@ test_view_template() {
     test_title "查看模板配置"
 
     # 查看模板配置
-    local output=$(run_logcmd template show 2>&1)
+    local output=$(run_logcmd config show 2>&1)
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if [[ -n "$output" ]]; then
@@ -106,7 +106,7 @@ test_filename_sanitization() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行包含特殊字符的命令
-    run_logcmd echo "test:with/special*chars" >/dev/null 2>&1
+    run_logcmd run echo "test:with/special*chars" >/dev/null 2>&1
 
     # 验证日志文件被创建（文件名应该清理了特殊字符）
     local log_file=$(get_latest_log ".logcmd")
@@ -135,7 +135,7 @@ test_project_name_extraction() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行命令
-    run_logcmd echo "test" >/dev/null 2>&1
+    run_logcmd run echo "test" >/dev/null 2>&1
 
     # 验证日志文件存在
     local log_file=$(get_latest_log ".logcmd")

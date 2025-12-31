@@ -3,6 +3,8 @@
 # 变量定义
 BINARY_NAME=logcmd
 BUILD_DIR=./bin
+CACHE_DIR=$(abspath ./.cache)
+GO_BUILD_CACHE=$(CACHE_DIR)/go-build
 GO_BIN:=$(shell go env GOBIN)
 ifeq ($(GO_BIN),)
 GO_BIN:=$(shell go env GOPATH)/bin
@@ -16,7 +18,8 @@ all: build
 build:
 	@echo "正在编译 $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME) cmd/logcmd/main.go
+	@mkdir -p $(GO_BUILD_CACHE)
+	GOCACHE=$(GO_BUILD_CACHE) go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME) cmd/logcmd/main.go
 	@echo "编译完成: $(BUILD_DIR)/$(BINARY_NAME)"
 
 # 安装到系统
@@ -118,6 +121,7 @@ test-all: test test-scenarios
 clean:
 	@echo "清理构建产物..."
 	rm -rf $(BUILD_DIR)
+	rm -rf $(CACHE_DIR)
 	rm -rf logs
 	rm -rf coverage
 	@echo "清理完成"
@@ -136,10 +140,11 @@ lint:
 build-all:
 	@echo "交叉编译所有平台..."
 	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 cmd/logcmd/main.go
-	GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 cmd/logcmd/main.go
-	GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 cmd/logcmd/main.go
-	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe cmd/logcmd/main.go
+	@mkdir -p $(GO_BUILD_CACHE)
+	GOCACHE=$(GO_BUILD_CACHE) GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 cmd/logcmd/main.go
+	GOCACHE=$(GO_BUILD_CACHE) GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 cmd/logcmd/main.go
+	GOCACHE=$(GO_BUILD_CACHE) GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 cmd/logcmd/main.go
+	GOCACHE=$(GO_BUILD_CACHE) GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe cmd/logcmd/main.go
 	@echo "交叉编译完成"
 
 # 运行示例

@@ -172,6 +172,9 @@ func addElement(reader *bufio.Reader, template *LogNameTemplate) error {
 		fmt.Println("已添加：命令名称")
 	case "2":
 		element.Type = ElementTypeTime
+		fmt.Println("时间格式提示：使用 Go 的时间布局 20060102_150405 来定义输出样式")
+		fmt.Println("示例：20060102_150405 => 20240115_090301，2006 表示年份，01 表示月份，02 表示日期")
+		fmt.Println("常用片段：2006(年) 01(月) 02(日) 15(24小时) 04(分) 05(秒)")
 		fmt.Print("输入时间格式（默认: 20060102_150405）: ")
 		format, _ := reader.ReadString('\n')
 		format = strings.TrimSpace(format)

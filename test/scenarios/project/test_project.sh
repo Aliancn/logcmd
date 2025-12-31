@@ -14,11 +14,11 @@ test_list_projects() {
     # 创建几个测试项目并执行命令
     local project1=$(create_test_project "project1")
     cd "$project1" && mkdir -p .logcmd
-    run_logcmd echo "test1" >/dev/null 2>&1
+    run_logcmd run echo "test1" >/dev/null 2>&1
 
     local project2=$(create_test_project "project2")
     cd "$project2" && mkdir -p .logcmd
-    run_logcmd echo "test2" >/dev/null 2>&1
+    run_logcmd run echo "test2" >/dev/null 2>&1
 
     # 列出项目
     local output=$(run_logcmd project list 2>&1)
@@ -37,8 +37,8 @@ test_project_info() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行几个命令
-    run_logcmd echo "test command" >/dev/null 2>&1
-    run_logcmd ls >/dev/null 2>&1
+    run_logcmd run echo "test command" >/dev/null 2>&1
+    run_logcmd run ls >/dev/null 2>&1
 
     # 查看项目信息
     local output=$(run_logcmd project info "$project_dir/.logcmd" 2>&1)
@@ -64,10 +64,10 @@ test_project_stats_update() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行成功的命令
-    run_logcmd echo "success" >/dev/null 2>&1
+    run_logcmd run echo "success" >/dev/null 2>&1
 
     # 执行失败的命令
-    run_logcmd false >/dev/null 2>&1 || true
+    run_logcmd run false >/dev/null 2>&1 || true
 
     # 查看项目统计
     local output=$(run_logcmd project info "$project_dir/.logcmd" 2>&1)
@@ -93,7 +93,7 @@ test_project_cleanup() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行命令
-    run_logcmd echo "test" >/dev/null 2>&1
+    run_logcmd run echo "test" >/dev/null 2>&1
 
     # 验证项目已注册
     local list_output=$(run_logcmd project list 2>&1)
@@ -119,7 +119,7 @@ test_multiple_projects() {
     for i in {1..3}; do
         local project=$(create_test_project "multi_project_$i")
         cd "$project" && mkdir -p .logcmd
-        run_logcmd echo "project $i" >/dev/null 2>&1
+        run_logcmd run echo "project $i" >/dev/null 2>&1
         projects+=("$project")
     done
 

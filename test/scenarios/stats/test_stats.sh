@@ -15,10 +15,10 @@ test_stats_analysis() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行多个不同的命令
-    run_logcmd echo "test1" >/dev/null 2>&1
-    run_logcmd ls >/dev/null 2>&1
-    run_logcmd pwd >/dev/null 2>&1
-    run_logcmd false >/dev/null 2>&1 || true
+    run_logcmd run echo "test1" >/dev/null 2>&1
+    run_logcmd run ls >/dev/null 2>&1
+    run_logcmd run pwd >/dev/null 2>&1
+    run_logcmd run false >/dev/null 2>&1 || true
 
     # 运行统计分析
     local output=$(run_logcmd stats "$project_dir/.logcmd" 2>&1)
@@ -44,8 +44,8 @@ test_log_search() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行包含特定关键词的命令
-    run_logcmd echo "UNIQUE_KEYWORD_12345" >/dev/null 2>&1
-    run_logcmd echo "another message" >/dev/null 2>&1
+    run_logcmd run echo "UNIQUE_KEYWORD_12345" >/dev/null 2>&1
+    run_logcmd run echo "another message" >/dev/null 2>&1
 
     # 搜索关键词
     local output=$(run_logcmd search "$project_dir/.logcmd" "UNIQUE_KEYWORD_12345" 2>&1)
@@ -71,7 +71,7 @@ test_search_not_found() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行命令
-    run_logcmd echo "test message" >/dev/null 2>&1
+    run_logcmd run echo "test message" >/dev/null 2>&1
 
     # 搜索不存在的关键词
     local output=$(run_logcmd search "$project_dir/.logcmd" "NONEXISTENT_KEYWORD_99999" 2>&1)
@@ -97,7 +97,7 @@ test_history_query() {
 
     # 执行多个命令
     for i in {1..5}; do
-        run_logcmd echo "command $i" >/dev/null 2>&1
+        run_logcmd run echo "command $i" >/dev/null 2>&1
     done
 
     # 查询历史记录
@@ -124,12 +124,12 @@ test_command_frequency() {
 
     # 执行同一命令多次
     for i in {1..3}; do
-        run_logcmd echo "repeated" >/dev/null 2>&1
+        run_logcmd run echo "repeated" >/dev/null 2>&1
     done
 
     # 执行其他命令
-    run_logcmd ls >/dev/null 2>&1
-    run_logcmd pwd >/dev/null 2>&1
+    run_logcmd run ls >/dev/null 2>&1
+    run_logcmd run pwd >/dev/null 2>&1
 
     # 运行统计
     local output=$(run_logcmd stats "$project_dir/.logcmd" 2>&1)
@@ -154,7 +154,7 @@ test_date_query() {
     cd "$project_dir" && mkdir -p .logcmd
 
     # 执行命令
-    run_logcmd echo "today's log" >/dev/null 2>&1
+    run_logcmd run echo "today's log" >/dev/null 2>&1
 
     # 查看今天的日志目录
     local today=$(date +%Y-%m-%d)

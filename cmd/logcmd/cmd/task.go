@@ -15,6 +15,7 @@ import (
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/persistence"
 	"github.com/aliancn/logcmd/internal/tasks"
+	"github.com/aliancn/logcmd/internal/tasks/operations"
 	"github.com/spf13/cobra"
 )
 
@@ -95,7 +96,7 @@ func listTasks() error {
 
 	for _, task := range activeTasks {
 		// 检查进程是否存活
-		alive := checkProcessAlive(task.PID)
+		alive := operations.CheckProcessAlive(task.PID)
 		if !alive {
 			// 如果进程不在了，更新数据库状态
 			_ = manager.MarkStopped(task.ID, model.TaskStatusFailed, "进程异常退出 (检测到 PID 失效)")
@@ -128,36 +129,6 @@ func listTasks() error {
 	}
 
 	return nil
-}
-
-func checkProcessAlive(pid *int64) bool {
-	if pid == nil || *pid <= 0 {
-		return false
-	}
-	process, err := os.FindProcess(int(*pid))
-	if err != nil {
-		return false
-	}
-	// 发送信号 0 检查进程是否存在
-	err = process.Signal(syscall.Signal(0))
-	if err == nil {
-		return true
-	}
-
-	// 检查特定错误
-	if errors.Is(err, os.ErrProcessDone) {
-		return false
-	}
-
-	// 检查 errno
-	if errno, ok := err.(syscall.Errno); ok {
-		if errno == syscall.ESRCH {
-			return false
-		}
-	}
-
-	// 其他错误（如 syscall.EPERM 无权限）说明进程存在
-	return true
 }
 
 func formatPID(task *model.Task) string {
@@ -194,34 +165,14 @@ func stopTask(idArg string, force bool) error {
 		return err
 	}
 
-	if !task.IsActive() {
+	action, err := operations.StopTask(manager, task, force)
+	if err != nil {
+		return err
+	}
+
+	if action == "已结束" {
 		fmt.Printf("任务 #%d 已结束，当前状态：%s\n", task.ID, task.Status)
 		return nil
-	}
-
-	if task.PID != nil && *task.PID > 0 {
-		proc, findErr := os.FindProcess(int(*task.PID))
-		if findErr == nil {
-			if force {
-				_ = proc.Kill()
-			} else {
-				termErr := proc.Signal(os.Interrupt)
-				if termErr != nil && !errors.Is(termErr, os.ErrProcessDone) {
-					_ = proc.Kill()
-				}
-			}
-		}
-	}
-
-	action := "停止"
-	status := model.TaskStatusStopped
-	if force {
-		action = "终止"
-		status = model.TaskStatusFailed
-	}
-
-	if err := manager.MarkStopped(task.ID, status, fmt.Sprintf("用户请求%s任务", action)); err != nil {
-		return err
 	}
 
 	fmt.Printf("任务 #%d 已%s\n", task.ID, action)

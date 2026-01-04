@@ -73,37 +73,43 @@ type Model struct {
 
 ## 4. 实施阶段 (Phases)
 
-### 第一阶段：浏览器核心 (MVP) - [已完成]
+### 第一阶段：浏览器核心 (MVP) - ✅ 已完成
 **目标**: 实现完整的“浏览”路径：项目列表 -> 历史列表 -> 日志详情。
 
-- [x] **基础架构**: 添加 `logcmd ui` 命令，初始化 UI 包结构。
-- [x] **项目列表 (Project List)**: 集成 `internal/registry`，展示项目列表，支持选中。
-- [x] **历史列表 (History List)**: 集成 `internal/history`，展示命令历史，支持选中。
-- [x] **日志查看器 (Log Viewer)**: 读取日志文件，支持滚动和基础搜索。
+1.  **基础架构**:
+    - [x] 添加 `logcmd ui` 命令。
+    - [x] 初始化 `internal/ui` 包结构。
+    - [x] 定义基本的 Lipgloss 样式 (Theme)。
 
-### 第二阶段：交互与管理 (进行中)
+2.  **项目列表 (Project List)**:
+    - [x] 集成 `internal/registry` 获取数据。
+    - [x] 使用 `bubbles/list` 展示项目 (ID, 路径, 更新时间)。
+    - [x] 实现 `Enter` 键选中项目并切换状态。
+
+3.  **历史列表 (History List)**:
+    - [x] 接收选中的 Project ID。
+    - [x] 集成 `internal/history` 查询该项目的运行记录。
+    - [x] 展示命令、时间、状态 (✅/❌)、耗时。
+    - [x] 实现 `Esc` 返回项目列表，`Enter` 进入日志详情。
+
+4.  **日志查看器 (Log Viewer)**:
+    - [x] 读取选定历史记录的日志文件路径。
+    - [x] 使用 `bubbles/viewport` 加载文件内容。
+    - [x] 支持 `j/k` 滚动，`gg/G` 跳转，`/` 搜索内容。
+
+### 第二阶段：交互与管理（大部分完成）
 **目标**: 增加对项目和任务的操作能力。
 
 1.  **任务监控 (Task Manager)**:
-    - [x] **数据源集成**:
-        - 根 Model 注入 `tasks.Manager`，`logcmd ui` 启动时统一构建。
-        - `taskmanager` 模块按需调用 `manager.ListActive()` 获取运行中任务。
-    - [x] **视图实现**:
-        - 已创建 `internal/ui/modules/taskmanager`，采用 `bubbles/list` 展示 ID / PID / Command / Status / Log。
-        - 通过 `tea.Tick` 每 5 秒刷新一次列表，并在状态栏提示刷新结果或错误。
-    - [x] **任务控制**:
-        - 复用 `internal/tasks/operations.StopTask`，提供 `s`（优雅停止）和 `k`（强制终止）快捷键。
-        - 操作完自动刷新，确保列表状态实时。
-    - [x] **全局集成**:
-        - `internal/ui/model.go`新增 `TaskListView` 状态和 `taskList` 子模块。
-        - 全局 `tab` 快捷键用于进入/退出任务视图，`esc` 返回上一视图，`status bar` 提示新的快捷键。
+    - [x] 新增快捷键 `tab` 切换到任务视图，`esc`/`tab` 返回上一视图。
+    - [x] 根 Model 注入 `tasks.Manager`，`taskmanager` 模块使用 `ListActive()` 拉取任务列表并在状态栏反馈刷新结果。
+    - [x] 通过 `tea.Tick` 每 5 秒刷新，展示 ID / PID / Command / Status / Log。
+    - [x] 支持 `s`（Stop）与 `k`（Kill）快捷键，调用 `internal/tasks/operations.StopTask`，操作后自动刷新列表。
 
 2.  **数据操作**:
-    - [x] **项目列表增强**:
-        - 支持 `d` 键触发 `registry.CheckAndCleanup`，并在列表底部给出“已清理无效项目”提示。
-        - （TODO）`d` 目前是直接清理，无确认步骤；如需删除特定项目可再补 `Delete` 逻辑。
-    - [ ] **历史列表增强**:
-        - 仍需优化列布局与筛选体验；可考虑利用 `history.QueryOptions` 提供状态过滤或额外筛选面板。
+    - [x] 项目列表支持 `d` 一键清理无效项目（`registry.CheckAndCleanup`），并显示状态提示。
+    - [x] 支持逐个删除项目（`x` 快捷键，确认后调用 `registry.Delete` 并自动刷新列表）。
+    - [x] 历史列表增加筛选、状态过滤及更丰富的列展示（`f` 循环 All/Success/Failed，标题同步展示筛选状态）。
 
 ### 第三阶段：可视化与增强
 **目标**: 提供更直观的数据展示。
@@ -117,8 +123,19 @@ type Model struct {
 
 ## 5. 关键集成点
 
-*   **数据源**: 重用现有的 `internal/` 包。
+*   **数据源**: 必须重用现有的 `internal/` 包，不可复制逻辑。
     *   `registry.NewRegistry()`: 获取项目列表。
     *   `history.NewManager()`: 获取历史记录。
     *   `tasks.NewManager()`: 获取后台任务。
 *   **配置**: TUI 应尊重现有的全局配置 (如数据库位置)。
+
+## 6. 下一步行动 (Action Plan)
+
+根据当前代码审查，第一阶段和第二阶段的大部分核心功能已就绪。接下来的工作重点是完善用户体验和数据管理能力。
+
+### 优先任务
+1.  **统计信息预览 (Preparation for Phase 3)**:
+    *   设计 Statistics Model，计划在 Project List 界面右侧或底部展示选中项目的 `Success Rate` 和 `Total Runs` 可视化组件。
+
+### 待定任务
+*   全局搜索界面 (集成 `internal/search`)。

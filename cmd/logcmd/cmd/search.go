@@ -12,7 +12,6 @@ import (
 
 	"github.com/aliancn/logcmd/internal/config"
 	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/search"
 	"github.com/spf13/cobra"
 )
@@ -145,11 +144,12 @@ func buildSearchOptions(dir string, compiled *regexp.Regexp) (*search.SearchOpti
 }
 
 func runSearchAllProjects(ctx context.Context, compiled *regexp.Regexp) error {
-	reg, err := registry.New()
+	services, err := newCLIServices()
 	if err != nil {
-		return fmt.Errorf("初始化项目注册表失败: %w", err)
+		return err
 	}
-	defer reg.Close()
+	defer services.Close()
+	reg := services.Registry()
 
 	entries, err := reg.List()
 	if err != nil {

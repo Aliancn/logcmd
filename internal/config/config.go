@@ -53,17 +53,8 @@ func mergeConfig(dst *Config, src *PersistentConfig) {
 	if src.BufferSize > 0 {
 		dst.BufferSize = src.BufferSize
 	}
-	// bool 类型比较难判断是否设置了（默认为false），这里简单覆盖
-	// 实际生产中可能需要使用指针或 map 来区分"未设置"和"设置为false"
-	// 但为了简单，假设配置文件中存在即覆盖（当前 JSON omitempty 机制下，false 也会被忽略，需要注意）
-	// TODO: 改进 bool 类型的合并策略，当前暂且认为如果 src 加载了就覆盖
-	// 由于 PersistentConfig 定义了 omitempty，如果文件中是 false，Unmarshal 后也是 false
-	// 这里暂时无法区分"文件中显式写了false"和"文件中没写默认false"。
-	// 鉴于目前默认值是 false，如果用户想开启 (true)，则可以覆盖。
-	// 如果默认值改成 true，用户想关闭 (false)，则需要指针。
-	// 既然默认是 false，那么只有 true 有意义。
-	if src.AutoCompress {
-		dst.AutoCompress = src.AutoCompress
+	if src.AutoCompress != nil {
+		dst.AutoCompress = *src.AutoCompress
 	}
 
 	if src.TimeFormat != "" {

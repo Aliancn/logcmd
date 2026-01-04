@@ -167,7 +167,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("auto_compress 必须是 boolean (true/false): %w", err)
 		}
-		cfg.AutoCompress = v
+		cfg.AutoCompress = boolPtr(v)
 	case "time_format":
 		cfg.TimeFormat = val
 	default:
@@ -183,7 +183,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 	if globalFlag {
 		scope = "全局"
 	}
-	
+
 	// 为了显示友好，如果是 time_format，我们也许想显示别名？
 	// 但实际上存的是格式串。这里直接显示值即可。
 	fmt.Printf("已更新%s配置: %s = %v\n", scope, key, val)
@@ -227,4 +227,8 @@ func runConfigList(cmd *cobra.Command, args []string) error {
 	w.Flush()
 
 	return nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

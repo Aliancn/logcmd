@@ -27,7 +27,7 @@ func New() (*Registry, error) {
 		return nil, fmt.Errorf("获取数据库路径失败: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库失败: %w", err)
 	}

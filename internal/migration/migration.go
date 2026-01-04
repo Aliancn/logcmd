@@ -198,6 +198,40 @@ func (m *Migration) createNewTables() error {
 		return fmt.Errorf("创建 system_config 表失败: %w", err)
 	}
 
+	// 创建后台任务表
+	_, err = tx.Exec(`
+		CREATE TABLE IF NOT EXISTS tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			command TEXT NOT NULL,
+			command_args TEXT,
+			working_dir TEXT NOT NULL,
+			log_dir TEXT NOT NULL,
+			status TEXT NOT NULL,
+			pid INTEGER,
+			log_file_path TEXT,
+			exit_code INTEGER,
+			error_message TEXT,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			started_at TIMESTAMP,
+			completed_at TIMESTAMP
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("创建 tasks 表失败: %w", err)
+	}
+
+	taskIndexes := []string{
+		"CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
+		"CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at)",
+	}
+
+	for _, idx := range taskIndexes {
+		if _, err := tx.Exec(idx); err != nil {
+			return fmt.Errorf("创建 tasks 索引失败: %w", err)
+		}
+	}
+
 	// 插入默认配置
 	_, err = tx.Exec(`
 		INSERT OR IGNORE INTO system_config (key, value, description, updated_at) VALUES

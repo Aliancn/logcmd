@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/template"
 	"github.com/spf13/cobra"
 )
@@ -55,11 +54,12 @@ func init() {
 }
 
 func listProjects() error {
-	reg, err := registry.New()
+	services, err := newCLIServices()
 	if err != nil {
-		return fmt.Errorf("初始化项目注册表失败: %w", err)
+		return err
 	}
-	defer reg.Close()
+	defer services.Close()
+	reg := services.Registry()
 
 	entries, err := reg.List()
 	if err != nil {
@@ -238,11 +238,12 @@ const (
 )
 
 func cleanProjects() error {
-	reg, err := registry.New()
+	services, err := newCLIServices()
 	if err != nil {
-		return fmt.Errorf("初始化项目注册表失败: %w", err)
+		return err
 	}
-	defer reg.Close()
+	defer services.Close()
+	reg := services.Registry()
 
 	if err := reg.CheckAndCleanup(); err != nil {
 		return fmt.Errorf("清理失败: %w", err)
@@ -253,11 +254,12 @@ func cleanProjects() error {
 }
 
 func deleteProject(target string) error {
-	reg, err := registry.New()
+	services, err := newCLIServices()
 	if err != nil {
-		return fmt.Errorf("初始化项目注册表失败: %w", err)
+		return err
 	}
-	defer reg.Close()
+	defer services.Close()
+	reg := services.Registry()
 
 	project, err := reg.Get(target)
 	if err != nil {

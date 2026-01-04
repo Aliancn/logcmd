@@ -12,15 +12,6 @@
         - 支持按数量保留（如：保留最近 1000 条）。
         - 支持按大小保留（如：项目日志总大小限制为 1GB）。
         - 提供 `logcmd clean --auto` 命令及配置项。
-- [ ] **配置文件支持 (Configuration Management)**
-    - **需求**: 目前主要依赖命令行参数，缺乏持久化的个性化配置。
-    - **功能**:
-        - 支持全局配置 `~/.logcmd/config.yaml`。
-        - 支持项目级配置 `.logcmd/config.yaml`。
-        - 配置项包括：默认保留策略、默认排除模式、颜色主题等。
-- [ ] **实时日志流 (Live Tailing)**
-    - **需求**: 类似于 `tail -f`，但在 logcmd 的管理上下文中查看正在运行的命令。
-    - **功能**: `logcmd tail <id>` 或 `logcmd attach <id>`。
 
 ## P1: 交互体验升级 (Interactive Experience)
 *从“命令行工具”进化为“终端应用”，大幅提升易用性。*
@@ -32,9 +23,6 @@
         - **Preview**: 选中日志即时预览内容。
         - **Filter**: 界面内直接输入关键词过滤。
     - **命令**: `logcmd ui` 或 `logcmd browse`。
-- [ ] **智能补全 (Shell Completion)**
-    - **需求**: 提高输入效率。
-    - **功能**: 生成 Bash/Zsh/Fish 补全脚本，支持自动补全子命令、项目路径甚至最近的日志 ID。
 
 ## P2: 高级分析与处理 (Advanced Analysis)**
 *挖掘日志数据的价值。*

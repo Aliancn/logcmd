@@ -18,6 +18,8 @@ test/scenarios/
 │   └── test_stats.sh
 ├── template/         # 模板配置测试
 │   └── test_template.sh
+├── tail/             # tail 实时查看测试
+│   └── test_tail.sh
 └── run_all.sh        # 主测试运行脚本
 ```
 
@@ -49,6 +51,9 @@ make test-scenarios-stats
 
 # 模板配置测试
 make test-scenarios-template
+
+# tail 场景测试
+make test-scenarios-tail
 ```
 
 或直接指定：
@@ -58,6 +63,7 @@ make test-scenarios-template
 ./test/scenarios/run_all.sh project
 ./test/scenarios/run_all.sh stats
 ./test/scenarios/run_all.sh template
+./test/scenarios/run_all.sh tail
 ```
 
 ## 测试场景详解
@@ -109,6 +115,14 @@ make test-scenarios-template
 - ✅ 配置文件持久化
 - ✅ 文件名安全字符处理
 - ✅ 项目名称提取
+
+### 5. tail 功能测试 (tail)
+
+验证后台任务日志的查询能力，包括静态查看与实时跟踪。
+
+**测试用例：**
+- ✅ tail -n 输出行数校验
+- ✅ tail -f 实时跟踪输出
 
 ## 测试辅助函数
 

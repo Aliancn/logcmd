@@ -11,7 +11,6 @@ import (
 
 	"github.com/aliancn/logcmd/internal/config"
 	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/services"
 	"github.com/aliancn/logcmd/internal/stats"
 	"github.com/aliancn/logcmd/internal/template"
@@ -60,26 +59,29 @@ func runStats(cmd *cobra.Command) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	reg, err := registry.New()
-	var svc *services.StatsService
-	if err == nil {
-		svc = services.NewStatsService(reg)
-		defer reg.Close()
+	cliServices, svcErr := newCLIServices()
+	var statsSvc *services.StatsService
+	if svcErr == nil {
+		statsSvc = services.NewStatsService(cliServices.Registry())
+		defer cliServices.Close()
 	}
 
 	if statsAllFlag {
-		if svc == nil || reg == nil {
-			return fmt.Errorf("初始化项目注册表失败: %w", err)
+		if statsSvc == nil || cliServices == nil {
+			if svcErr != nil {
+				return svcErr
+			}
+			return fmt.Errorf("统计服务未初始化")
 		}
-		return analyzeAllProjects(ctx, reg, svc)
+		return analyzeAllProjects(ctx, cliServices, statsSvc)
 	}
 
-	if svc == nil {
+	if statsSvc == nil {
 		fmt.Fprintf(os.Stderr, "警告: 统计服务未初始化，直接扫描日志目录\n")
 		return analyzeLogDir(ctx, logDirPath)
 	}
 
-	report, statErr := svc.StatsForPath(ctx, logDirPath)
+	report, statErr := statsSvc.StatsForPath(ctx, logDirPath)
 	if statErr != nil {
 		return fmt.Errorf("统计分析失败: %w", statErr)
 	}
@@ -87,7 +89,8 @@ func runStats(cmd *cobra.Command) error {
 	return nil
 }
 
-func analyzeAllProjects(ctx context.Context, reg *registry.Registry, svc *services.StatsService) error {
+func analyzeAllProjects(ctx context.Context, cliSvc *cliServices, svc *services.StatsService) error {
+	reg := cliSvc.Registry()
 	entries, err := reg.List()
 	if err != nil {
 		return fmt.Errorf("获取项目列表失败: %w", err)

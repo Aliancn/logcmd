@@ -259,3 +259,88 @@ func TestCommandHistory_FullWorkflow(t *testing.T) {
 		t.Errorf("GetDuration() = %v, want 2s", duration)
 	}
 }
+
+func TestTask_BeforeSave(t *testing.T) {
+	task := &model.Task{
+		Command:     "echo",
+		CommandArgs: []string{"hello", "world"},
+	}
+
+	if err := task.BeforeSave(); err != nil {
+		t.Fatalf("Task.BeforeSave() 失败: %v", err)
+	}
+
+	if task.Status != model.TaskStatusPending {
+		t.Errorf("Task.Status = %s, want %s", task.Status, model.TaskStatusPending)
+	}
+
+	if task.ArgsJSON == "" {
+		t.Fatal("Task.ArgsJSON 不应为空")
+	}
+
+	var args []string
+	if err := json.Unmarshal([]byte(task.ArgsJSON), &args); err != nil {
+		t.Fatalf("反序列化 ArgsJSON 失败: %v", err)
+	}
+
+	if len(args) != len(task.CommandArgs) {
+		t.Errorf("CommandArgs 长度 = %d, want %d", len(args), len(task.CommandArgs))
+	}
+}
+
+func TestTask_BeforeSaveRequiresCommand(t *testing.T) {
+	task := &model.Task{}
+	if err := task.BeforeSave(); err == nil {
+		t.Error("Task.BeforeSave() 在 Command 为空时应该返回错误")
+	}
+}
+
+func TestTask_AfterLoad(t *testing.T) {
+	task := &model.Task{
+		ArgsJSON: `["-c","echo ok"]`,
+	}
+	if err := task.AfterLoad(); err != nil {
+		t.Fatalf("Task.AfterLoad() 失败: %v", err)
+	}
+
+	if len(task.CommandArgs) != 2 {
+		t.Errorf("CommandArgs 长度 = %d, want 2", len(task.CommandArgs))
+	}
+
+	if task.CommandArgs[0] != "-c" || task.CommandArgs[1] != "echo ok" {
+		t.Errorf("CommandArgs = %v, want [-c echo ok]", task.CommandArgs)
+	}
+}
+
+func TestTask_AfterLoadInvalidJSON(t *testing.T) {
+	task := &model.Task{
+		ArgsJSON: "invalid json",
+	}
+	if err := task.AfterLoad(); err == nil {
+		t.Error("Task.AfterLoad() 应该在 JSON 无效时返回错误")
+	}
+}
+
+func TestTask_IsActive(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		want   bool
+	}{
+		{"待执行", model.TaskStatusPending, true},
+		{"运行中", model.TaskStatusRunning, true},
+		{"已成功", model.TaskStatusSuccess, false},
+		{"已失败", model.TaskStatusFailed, false},
+		{"已终止", model.TaskStatusStopped, false},
+		{"未知状态", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := &model.Task{Status: tt.status}
+			if got := task.IsActive(); got != tt.want {
+				t.Errorf("Task.IsActive() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

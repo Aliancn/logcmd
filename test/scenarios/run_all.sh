@@ -31,6 +31,7 @@ get_suite_description() {
         project) echo "项目管理测试" ;;
         stats) echo "统计和搜索测试" ;;
         template) echo "模板配置测试" ;;
+        tail) echo "tail 功能测试" ;;
         long_log) echo "大文件输出性能测试" ;;
         *) echo "未知测试" ;;
     esac
@@ -167,12 +168,13 @@ main() {
             echo "  - project: 项目管理测试"
             echo "  - stats: 统计和搜索测试"
             echo "  - template: 模板配置测试"
+            echo "  - tail: tail 功能测试"
             echo "  - long_log: 大文件输出性能测试"
             exit 1
         fi
     else
         # 运行所有测试套件
-        for suite in basic project stats template long_log; do
+        for suite in basic project stats template tail long_log; do
             run_test_suite "$suite" "$(get_suite_description $suite)" || true
         done
     fi

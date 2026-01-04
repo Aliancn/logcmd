@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -115,52 +114,40 @@ func (e *Executor) Execute(ctx context.Context, command string, args ...string) 
 
 // streamOutput 流式处理输出，同时写入终端和日志文件
 func (e *Executor) streamOutput(reader io.Reader, dest io.Writer) {
-	scanner := bufio.NewScanner(reader)
-	buf := make([]byte, 0, 256*1024)
-	scanner.Buffer(buf, 1024*1024)
-
-	var destWriter *bufio.Writer
-	if dest != nil {
-		destWriter = bufio.NewWriterSize(dest, 64*1024)
-		defer func() {
-			if err := destWriter.Flush(); err != nil {
-				fmt.Fprintf(e.stderr, "刷新输出失败: %v\n", err)
-			}
-		}()
-	}
-
-	var logWriter *bufio.Writer
+	// 包装 logFile 以支持并发写入
+	var logOutput io.Writer
 	if e.logFile != nil {
-		logWriter = bufio.NewWriterSize(&lockedWriter{w: e.logFile, mu: &e.logMu}, 64*1024)
-		defer func() {
-			if err := logWriter.Flush(); err != nil {
-				fmt.Fprintf(e.stderr, "刷新日志失败: %v\n", err)
-			}
-		}()
+		logOutput = &lockedWriter{w: e.logFile, mu: &e.logMu}
 	}
 
-	for scanner.Scan() {
-		line := append([]byte(nil), scanner.Bytes()...)
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
 
-		if destWriter != nil {
-			if _, err := destWriter.Write(line); err != nil {
-				fmt.Fprintf(e.stderr, "写入输出失败: %v\n", err)
-			} else if err := destWriter.WriteByte('\n'); err != nil {
-				fmt.Fprintf(e.stderr, "写入输出失败: %v\n", err)
+			if dest != nil {
+				// 直接写入 dest (通常是 stdout/stderr)，依靠其自身的缓冲机制（如果有）
+				// 这样可以确保终端输出的实时性
+				if _, wErr := dest.Write(chunk); wErr != nil {
+					fmt.Fprintf(e.stderr, "写入输出失败: %v\n", wErr)
+				}
+			}
+
+			if logOutput != nil {
+				// 写入日志 (Logger 可能会缓冲，但也可能定期刷新)
+				if _, wErr := logOutput.Write(chunk); wErr != nil {
+					fmt.Fprintf(e.stderr, "写入日志失败: %v\n", wErr)
+				}
 			}
 		}
 
-		if logWriter != nil {
-			if _, err := logWriter.Write(line); err != nil {
-				fmt.Fprintf(e.stderr, "写入日志失败: %v\n", err)
-			} else if err := logWriter.WriteByte('\n'); err != nil {
-				fmt.Fprintf(e.stderr, "写入日志失败: %v\n", err)
+		if err != nil {
+			if err != io.EOF {
+				fmt.Fprintf(e.stderr, "读取输出错误: %v\n", err)
 			}
+			break
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(e.stderr, "读取输出错误: %v\n", err)
 	}
 }
 

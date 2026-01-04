@@ -10,7 +10,7 @@ import (
 // PersistentConfig 定义可持久化的配置项
 type PersistentConfig struct {
 	BufferSize   int    `json:"buffer_size,omitempty"`   // 缓冲区大小
-	AutoCompress bool   `json:"auto_compress,omitempty"` // 是否自动压缩
+	AutoCompress *bool  `json:"auto_compress,omitempty"` // 是否自动压缩
 	TimeFormat   string `json:"time_format,omitempty"`   // 时间格式
 }
 
@@ -18,7 +18,7 @@ type PersistentConfig struct {
 func DefaultPersistentConfig() PersistentConfig {
 	return PersistentConfig{
 		BufferSize:   8192,
-		AutoCompress: false,
+		AutoCompress: nil,
 		TimeFormat:   "20060102_150405",
 	}
 }

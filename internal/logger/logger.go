@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/aliancn/logcmd/internal/config"
@@ -19,6 +20,9 @@ type Logger struct {
 	statsUpdater ProjectStatsUpdater
 	file         *os.File
 	writer       *bufio.Writer
+	logPath      string // 预设的日志路径
+	mu           sync.Mutex
+	lastFlush    time.Time
 }
 
 // RunRepository 抽象运行结果的持久化能力
@@ -45,16 +49,28 @@ func New(cfg *config.Config, repo RunRepository, statsUpdater ProjectStatsUpdate
 	}, nil
 }
 
+// SetLogPath 设置强制使用的日志路径
+func (l *Logger) SetLogPath(path string) {
+	l.logPath = path
+}
+
 // Run 执行命令并记录日志
-func (l *Logger) Run(ctx context.Context, command string, args ...string) error {
+func (l *Logger) Run(ctx context.Context, command string, args ...string) (*executor.Result, string, error) {
 	// 设置命令信息（用于生成日志文件名）
 	l.config.Command = command
 	l.config.CommandArgs = args
 
-	// 生成日志文件路径
-	logPath, err := l.config.GetLogFilePath()
-	if err != nil {
-		return fmt.Errorf("生成日志路径失败: %w", err)
+	var logPath string
+	var err error
+
+	if l.logPath != "" {
+		logPath = l.logPath
+	} else {
+		// 生成日志文件路径
+		logPath, err = l.config.GetLogFilePath()
+		if err != nil {
+			return nil, "", fmt.Errorf("生成日志路径失败: %w", err)
+		}
 	}
 
 	// 自动注册项目（如果尚未注册）
@@ -69,13 +85,22 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) error 
 	// 打开日志文件
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return fmt.Errorf("打开日志文件失败: %w", err)
+		return nil, "", fmt.Errorf("打开日志文件失败: %w", err)
 	}
 	defer file.Close()
 
 	l.file = file
 	l.writer = bufio.NewWriterSize(file, l.config.BufferSize)
-	defer l.writer.Flush()
+	l.lastFlush = time.Now()
+
+	// 确保最后刷新
+	defer func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if l.writer != nil {
+			l.writer.Flush()
+		}
+	}()
 
 	// 显示日志文件路径
 	fmt.Printf("正在记录日志到: %s\n", logPath)
@@ -83,13 +108,17 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) error 
 	// 写入日志头部
 	l.writeHeader(command, args)
 
+	// 创建带锁的 writer
+	sw := &syncedWriter{l: l}
+
 	// 创建执行器并执行命令
-	exec := executor.New(l.writer, os.Stdout, os.Stderr)
+	exec := executor.New(sw, os.Stdout, os.Stderr)
 	result, err := exec.Execute(ctx, command, args...)
 
 	// 写入元数据
 	if result != nil {
 		exec.WriteMetadata(result)
+		
 		if project != nil && l.statsUpdater != nil {
 			if err := l.statsUpdater.UpdateProjectStats(project.ID, result.Command, result.Success, result.Duration); err != nil {
 				fmt.Fprintf(os.Stderr, "更新项目统计失败: %v\n", err)
@@ -102,24 +131,22 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) error 
 		}
 	}
 
-	// 刷新缓冲区
-	if err := l.writer.Flush(); err != nil {
-		fmt.Fprintf(os.Stderr, "刷新日志缓冲区失败: %v\n", err)
-	}
-
 	if err != nil {
-		return fmt.Errorf("命令执行失败: %w", err)
+		return result, logPath, fmt.Errorf("命令执行失败: %w", err)
 	}
 
 	if !result.Success {
-		return fmt.Errorf("命令退出码: %d", result.ExitCode)
+		return result, logPath, fmt.Errorf("命令退出码: %d", result.ExitCode)
 	}
 
-	return nil
+	return result, logPath, nil
 }
 
 // writeHeader 写入日志头部信息
 func (l *Logger) writeHeader(command string, args []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	
 	header := fmt.Sprintf(`
 ################################################################################
 # LogCmd - 命令执行日志
@@ -134,10 +161,15 @@ func (l *Logger) writeHeader(command string, args []string) {
 	)
 
 	l.writer.WriteString(header)
+	l.writer.Flush()
+	l.lastFlush = time.Now()
 }
 
 // Close 关闭日志记录器
 func (l *Logger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	if l.writer != nil {
 		if err := l.writer.Flush(); err != nil {
 			return err
@@ -147,4 +179,22 @@ func (l *Logger) Close() error {
 		return l.file.Close()
 	}
 	return nil
+}
+
+type syncedWriter struct {
+	l *Logger
+}
+
+func (s *syncedWriter) Write(p []byte) (int, error) {
+	s.l.mu.Lock()
+	defer s.l.mu.Unlock()
+
+	n, err := s.l.writer.Write(p)
+	if err == nil {
+		if time.Since(s.l.lastFlush) > 200*time.Millisecond {
+			s.l.writer.Flush()
+			s.l.lastFlush = time.Now()
+		}
+	}
+	return n, err
 }

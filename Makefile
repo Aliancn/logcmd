@@ -34,7 +34,7 @@ install: build
 test:
 	@echo "运行测试..."
 	@echo "======================================"
-	go test -v ./test/...
+	go test -v ./test/go_module_test/...
 	@echo "======================================"
 	@echo "所有测试完成！"
 
@@ -42,47 +42,47 @@ test:
 test-coverage:
 	@echo "运行测试并生成覆盖率报告..."
 	@mkdir -p coverage
-	go test -v -coverprofile=coverage/coverage.out ./test/...
+	go test -v -coverprofile=coverage/coverage.out ./test/go_module_test/...
 	go tool cover -html=coverage/coverage.out -o coverage/coverage.html
 	@echo "覆盖率报告已生成: coverage/coverage.html"
 
 # 运行特定模块的测试
 test-config:
 	@echo "测试 config 模块..."
-	go test -v ./test/config/...
+	go test -v ./test/go_module_test/config/...
 
 test-executor:
 	@echo "测试 executor 模块..."
-	go test -v ./test/executor/...
+	go test -v ./test/go_module_test/executor/...
 
 test-model:
 	@echo "测试 model 模块..."
-	go test -v ./test/model/...
+	go test -v ./test/go_module_test/model/...
 
 test-registry:
 	@echo "测试 registry 模块..."
-	go test -v ./test/registry/...
+	go test -v ./test/go_module_test/registry/...
 
 test-history:
 	@echo "测试 history 模块..."
-	go test -v ./test/history/...
+	go test -v ./test/go_module_test/history/...
 
 test-template:
 	@echo "测试 template 模块..."
-	go test -v ./test/template/...
+	go test -v ./test/go_module_test/template/...
 
 test-stats:
 	@echo "测试 stats 模块..."
-	go test -v ./test/stats/...
+	go test -v ./test/go_module_test/stats/...
 
 test-search:
 	@echo "测试 search 模块..."
-	go test -v ./test/search/...
+	go test -v ./test/go_module_test/search/...
 
 # 快速测试（不显示详细输出）
 test-quick:
 	@echo "快速测试..."
-	go test ./test/...
+	go test ./test/go_module_test/...
 
 # 场景功能测试（端到端测试）
 test-scenarios: build
@@ -105,6 +105,10 @@ test-scenarios-stats: build
 test-scenarios-template: build
 	@echo "运行模板配置场景测试..."
 	@./test/scenarios/run_all.sh template
+
+test-scenarios-tail: build
+	@echo "运行 tail 场景测试..."
+	@./test/scenarios/run_all.sh tail
 
 test-scenarios-long-log: build
 	@echo "运行大文件输出性能测试..."

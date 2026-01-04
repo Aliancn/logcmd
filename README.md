@@ -135,6 +135,11 @@ logcmd -dir ./mylogs run npm test
 
 # 执行复杂命令
 logcmd run python train.py --epochs 100
+
+# 后台执行命令（任务模式）
+logcmd run -d npm start
+logcmd task list
+logcmd task stop 1
 ```
 
 日志文件格式：`.logcmd/YYYY-MM-DD/log_YYYYMMDD_HHMMSS.log`
@@ -232,6 +237,30 @@ logcmd project delete /path/to/.logcmd
 ```
 
 注意：删除项目会同时删除数据库记录以及对应的 `.logcmd` 日志目录（包含其中的日志文件），操作前请确认不再需要这些数据。
+
+### 5. 后台任务管理
+
+适合需要长时间运行且无需实时查看输出的命令。
+
+```bash
+# 以后台任务方式执行命令
+logcmd run -d npm start
+
+# 查看所有运行中的任务
+logcmd task list
+
+# 优雅停止任务
+logcmd task stop 3
+
+# 强制终止任务
+logcmd task kill 3
+```
+
+说明：
+- `logcmd run -d` 会立即返回，并在后台继续写入日志
+- 任务信息、PID 和日志路径会记录在 `logcmd task list` 中
+- `stop` 尝试发送 `INT` 信号，`kill` 直接结束进程
+- 任务结束后可以在历史记录和统计中查看执行结果
 
 #### 跨项目搜索
 
@@ -370,6 +399,14 @@ logcmd stats
 - `-version`: 显示版本信息
 - `help`, `-help`: 显示帮助信息
 
+### 执行命令
+```bash
+logcmd run [选项] <command> [args...]
+```
+
+选项：
+- `-d`: 以后台任务方式运行命令 (`task` 子命令可管理)
+
 ### 搜索命令
 ```bash
 logcmd search [选项]
@@ -404,6 +441,15 @@ logcmd project <command>
 - `clean`: 清理不存在的项目
 - `delete <id|path>`: 删除指定的项目（支持ID或路径）
 
+### 任务管理命令
+```bash
+logcmd task <command>
+```
+
+命令：
+- `list`: 查看正在运行的后台任务
+- `stop <id>`: 发送中断信号，尝试优雅停止任务
+- `kill <id>`: 强行终止任务
 ## 日志文件格式
 
 日志文件包含完整的命令执行信息：

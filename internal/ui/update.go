@@ -18,10 +18,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = typed.Width, typed.Height
 		m.ready = true
-		m.projectList.SetSize(m.width, m.height)
+		listWidth, statsWidth, vertical, compact := m.projectLayout()
+		m.projectSplitVertical = vertical
+		m.projectStatsCompact = compact
+		if compact {
+			m.projectList.SetSize(m.width, m.height)
+			m.statsPanel.SetSize(m.width, 0)
+		} else if vertical {
+			half := m.height / 2
+			if half < 1 {
+				half = m.height
+			}
+			m.projectList.SetSize(m.width, half)
+			m.statsPanel.SetSize(m.width, half)
+		} else {
+			m.projectList.SetSize(listWidth, m.height)
+			m.statsPanel.SetSize(statsWidth, m.height)
+		}
 		m.historyList.SetSize(m.width, m.height)
 		m.logViewer.SetSize(m.width, m.height)
 		m.taskList.SetSize(m.width, m.height)
+		m.searchView.SetSize(m.width, m.height)
 	case tea.KeyMsg:
 		if m.handleGlobalKey(typed, &cmds) {
 			break
@@ -61,7 +78,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logViewer, cmd = m.logViewer.Update(msg)
 	case TaskListView:
 		m.taskList, cmd = m.taskList.Update(msg)
+	case SearchView:
+		m.searchView, cmd = m.searchView.Update(msg)
 	}
+	cmds = append(cmds, cmd)
+
+	m.statsPanel, cmd = m.statsPanel.Update(msg)
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
@@ -82,6 +104,10 @@ func (m *Model) handleGlobalKey(keyMsg tea.KeyMsg, cmds *[]tea.Cmd) bool {
 			if cmd := m.exitTaskView(); cmd != nil {
 				*cmds = append(*cmds, cmd)
 			}
+		case SearchView:
+			if cmd := m.exitSearchView(); cmd != nil {
+				*cmds = append(*cmds, cmd)
+			}
 		default:
 			// 在项目列表中忽略
 		}
@@ -93,6 +119,20 @@ func (m *Model) handleGlobalKey(keyMsg tea.KeyMsg, cmds *[]tea.Cmd) bool {
 			}
 		} else {
 			if cmd := m.enterTaskView(); cmd != nil {
+				*cmds = append(*cmds, cmd)
+			}
+		}
+		return true
+	case key.Matches(keyMsg, m.globalKeys.Search):
+		if m.state == LogViewerView {
+			return false
+		}
+		if m.state == SearchView {
+			if cmd := m.exitSearchView(); cmd != nil {
+				*cmds = append(*cmds, cmd)
+			}
+		} else {
+			if cmd := m.enterSearchView(); cmd != nil {
 				*cmds = append(*cmds, cmd)
 			}
 		}
@@ -117,4 +157,47 @@ func (m *Model) exitTaskView() tea.Cmd {
 	}
 	m.state = target
 	return m.taskList.SetActive(false)
+}
+
+func (m *Model) enterSearchView() tea.Cmd {
+	m.prevState = m.state
+	m.searchView.SetCurrentProject(m.projectList.SelectedProject())
+	m.state = SearchView
+	return m.searchView.Activate()
+}
+
+func (m *Model) exitSearchView() tea.Cmd {
+	if m.state != SearchView {
+		return nil
+	}
+	target := m.prevState
+	if target == TaskListView || target == SearchView {
+		target = ProjectListView
+	}
+	m.state = target
+	return m.searchView.Deactivate()
+}
+
+func (m *Model) projectLayout() (listWidth, statsWidth int, vertical, compact bool) {
+	if m.width <= 0 {
+		return 0, 0, false, false
+	}
+	if m.width < 90 {
+		return m.width, 0, false, true
+	}
+	if m.width < 110 {
+		return m.width, m.width, true, false
+	}
+	statsWidth = m.width / 3
+	if statsWidth < 30 {
+		statsWidth = 30
+	}
+	if statsWidth > m.width/2 {
+		statsWidth = m.width / 2
+	}
+	listWidth = m.width - statsWidth
+	if listWidth < 40 {
+		return m.width, 0, false, true
+	}
+	return listWidth, statsWidth, false, false
 }

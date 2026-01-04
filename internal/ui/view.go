@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // View 渲染当前界面。
@@ -14,13 +16,15 @@ func (m *Model) View() string {
 	var body string
 	switch m.state {
 	case ProjectListView:
-		body = m.projectList.View()
+		body = m.renderProjectListWithStats()
 	case HistoryListView:
 		body = m.historyList.View()
 	case LogViewerView:
 		body = m.logViewer.View()
 	case TaskListView:
 		body = m.taskList.View()
+	case SearchView:
+		body = m.searchView.View()
 	default:
 		body = "未知视图"
 	}
@@ -40,7 +44,7 @@ func (m *Model) View() string {
 
 func (m *Model) renderStatusBar() string {
 	status := fmt.Sprintf("当前视图: %s", m.stateLabel())
-	help := "通用快捷键: tab 任务视图 · esc 返回 · ctrl+c 退出"
+	help := "通用快捷键: tab 任务视图 · ctrl+f 搜索 · esc 返回 · ctrl+c 退出"
 	return m.styles.StatusBar.Render(fmt.Sprintf("%s | %s", status, help))
 }
 
@@ -54,7 +58,33 @@ func (m *Model) stateLabel() string {
 		return "日志查看"
 	case TaskListView:
 		return "任务管理"
+	case SearchView:
+		return "全局搜索"
 	default:
 		return "未知"
 	}
+}
+
+func (m *Model) renderProjectListWithStats() string {
+	listView := m.projectList.View()
+	statsView := m.statsPanel.View()
+	if m.projectStatsCompact {
+		compact := strings.TrimSpace(m.statsPanel.CompactView())
+		if compact == "" {
+			return listView
+		}
+		dividerWidth := m.width
+		if dividerWidth <= 0 {
+			dividerWidth = 60
+		}
+		divider := strings.Repeat("─", dividerWidth)
+		return fmt.Sprintf("%s\n%s\n%s", compact, divider, listView)
+	}
+	if strings.TrimSpace(statsView) == "" {
+		return listView
+	}
+	if m.projectSplitVertical {
+		return lipgloss.JoinVertical(lipgloss.Left, listView, statsView)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, listView, statsView)
 }

@@ -17,13 +17,14 @@ import (
 
 // Model 管理项目列表视图。
 type Model struct {
-	list     list.Model
-	registry *registry.Registry
-	keys     keyMap
-	styles   common.Styles
-	width    int
-	height   int
-	confirm  deleteConfirmState
+	list          list.Model
+	registry      *registry.Registry
+	keys          keyMap
+	styles        common.Styles
+	width         int
+	height        int
+	confirm       deleteConfirmState
+	highlightedID int
 }
 
 // ProjectSelectedMsg 在用户选择项目时发出。
@@ -42,6 +43,11 @@ type ProjectDeletedMsg struct {
 	ProjectID   int
 	ProjectName string
 	Projects    []*model.Project
+}
+
+// ProjectHighlightedMsg 表示当前选中项发生变化。
+type ProjectHighlightedMsg struct {
+	Project *model.Project
 }
 
 // New 创建项目列表 Model。
@@ -128,6 +134,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		for i, project := range msg.Projects {
 			items[i] = projectItem{project: project}
 		}
+		m.highlightedID = 0
 		m.list.SetItems(items)
 		if msg.Status != "" {
 			m.list.NewStatusMessage(msg.Status)
@@ -140,6 +147,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		for i, project := range msg.Projects {
 			items[i] = projectItem{project: project}
 		}
+		m.highlightedID = 0
 		m.list.SetItems(items)
 		name := msg.ProjectName
 		if strings.TrimSpace(name) == "" {
@@ -151,6 +159,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	cmds = append(cmds, cmd)
+	m.enqueueHighlightChange(&cmds)
 
 	return m, tea.Batch(cmds...)
 }
@@ -315,6 +324,22 @@ func (m *Model) handleConfirmKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	return true, nil
 }
 
+func (m *Model) enqueueHighlightChange(cmds *[]tea.Cmd) {
+	current := m.selectedProject()
+	currentID := 0
+	if current != nil {
+		currentID = current.ID
+	}
+	if currentID == m.highlightedID {
+		return
+	}
+	m.highlightedID = currentID
+	project := current
+	*cmds = append(*cmds, func() tea.Msg {
+		return ProjectHighlightedMsg{Project: project}
+	})
+}
+
 func (m Model) renderConfirmPrompt() string {
 	if m.confirm.project == nil {
 		return ""
@@ -339,6 +364,11 @@ func safeProjectName(project *model.Project) string {
 		return name
 	}
 	return project.Path
+}
+
+// SelectedProject 暴露当前选中的项目。
+func (m Model) SelectedProject() *model.Project {
+	return m.selectedProject()
 }
 
 func max(a, b int) int {

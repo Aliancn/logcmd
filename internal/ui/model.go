@@ -10,6 +10,8 @@ import (
 	"github.com/aliancn/logcmd/internal/ui/modules/historylist"
 	"github.com/aliancn/logcmd/internal/ui/modules/logviewer"
 	"github.com/aliancn/logcmd/internal/ui/modules/projectlist"
+	"github.com/aliancn/logcmd/internal/ui/modules/searchview"
+	"github.com/aliancn/logcmd/internal/ui/modules/statspanel"
 	"github.com/aliancn/logcmd/internal/ui/modules/taskmanager"
 )
 
@@ -25,6 +27,8 @@ const (
 	LogViewerView
 	// TaskListView 展示后台任务。
 	TaskListView
+	// SearchView 展示全局搜索界面。
+	SearchView
 )
 
 // Model 是 TUI 根 Model。
@@ -46,6 +50,11 @@ type Model struct {
 	historyList historylist.Model
 	logViewer   logviewer.Model
 	taskList    taskmanager.Model
+	statsPanel  statspanel.Model
+	searchView  searchview.Model
+
+	projectSplitVertical bool
+	projectStatsCompact  bool
 }
 
 // NewRootModel 创建根 Model。
@@ -62,6 +71,8 @@ func NewRootModel(reg *registry.Registry, historyMgr *history.Manager, taskMgr *
 		historyList: historylist.New(historyMgr),
 		logViewer:   logviewer.New(),
 		taskList:    taskmanager.New(taskMgr),
+		statsPanel:  statspanel.New(historyMgr),
+		searchView:  searchview.New(reg),
 	}
 }
 

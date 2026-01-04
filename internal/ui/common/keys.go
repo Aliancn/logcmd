@@ -4,9 +4,10 @@ import "github.com/charmbracelet/bubbles/key"
 
 // GlobalKeyMap 定义全局快捷键。
 type GlobalKeyMap struct {
-	Quit key.Binding
-	Back key.Binding
-	Task key.Binding
+	Quit   key.Binding
+	Back   key.Binding
+	Task   key.Binding
+	Search key.Binding
 }
 
 // NewGlobalKeyMap 初始化默认快捷键。
@@ -24,10 +25,14 @@ func NewGlobalKeyMap() GlobalKeyMap {
 			key.WithKeys("tab"),
 			key.WithHelp("tab", "任务视图"),
 		),
+		Search: key.NewBinding(
+			key.WithKeys("ctrl+f"),
+			key.WithHelp("ctrl+f", "全局搜索"),
+		),
 	}
 }
 
 // ShortHelp 返回展示用快捷键列表。
 func (k GlobalKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Back, k.Task, k.Quit}
+	return []key.Binding{k.Back, k.Task, k.Search, k.Quit}
 }

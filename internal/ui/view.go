@@ -2,89 +2,67 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// View 渲染当前界面。
+// View 渲染当前界面（新架构 - 三段式布局）
 func (m *Model) View() string {
 	if !m.ready {
 		return "TUI 初始化中..."
 	}
 
-	var body string
-	switch m.state {
-	case ProjectListView:
-		body = m.renderProjectListWithStats()
-	case HistoryListView:
-		body = m.historyList.View()
-	case LogViewerView:
-		body = m.logViewer.View()
-	case TaskListView:
-		body = m.taskList.View()
-	case SearchView:
-		body = m.searchView.View()
+	// 1. 渲染Header (Removed)
+	// headerView := m.header.View()
+
+	// 2. 渲染TabBar
+	tabBarView := m.tabBar.View()
+
+	// 3. 渲染当前激活Tab的Main区域
+	var mainView string
+	switch m.activeTabIndex {
+	case 0:
+		mainView = m.projectsTab.View()
+	case 1:
+		mainView = m.tasksTab.View()
+	case 2:
+		mainView = m.searchTab.View()
+	case 3:
+		mainView = m.analyticsTab.View()
 	default:
-		body = "未知视图"
+		mainView = m.styles.Error.Render("未知Tab")
 	}
 
-	var builder strings.Builder
-	builder.WriteString(body)
-	builder.WriteString("\n\n")
-	builder.WriteString(m.renderStatusBar())
+	// 4. 渲染Footer
+	footerView := m.footer.View()
 
+	// 5. 组合三段式布局
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		// headerView,
+		tabBarView,
+		mainView,
+		footerView,
+	)
+
+	// 6. 如果有错误信息，叠加显示
 	if m.err != nil {
-		builder.WriteString("\n")
-		builder.WriteString(m.styles.Error.Render(fmt.Sprintf("错误: %v", m.err)))
+		errView := m.styles.Error.Render(fmt.Sprintf("错误: %v", m.err))
+		content = lipgloss.JoinVertical(lipgloss.Left, content, errView)
 	}
 
-	return builder.String()
-}
+	// 7. Command Palette叠加渲染（阶段4实现）
+	if m.showCmdPalette {
+		paletteView := m.cmdPalette.View()
+		// 使用lipgloss.Place居中叠加Command Palette
+		return lipgloss.Place(
+			m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			paletteView,
+			lipgloss.WithWhitespaceChars("░"),
+			lipgloss.WithWhitespaceForeground(m.theme.StatusBar),
+		)
+	}
 
-func (m *Model) renderStatusBar() string {
-	status := fmt.Sprintf("当前视图: %s", m.stateLabel())
-	help := "通用快捷键: tab 任务视图 · ctrl+f 搜索 · esc 返回 · ctrl+c 退出"
-	return m.styles.StatusBar.Render(fmt.Sprintf("%s | %s", status, help))
-}
-
-func (m *Model) stateLabel() string {
-	switch m.state {
-	case ProjectListView:
-		return "项目列表"
-	case HistoryListView:
-		return "历史记录"
-	case LogViewerView:
-		return "日志查看"
-	case TaskListView:
-		return "任务管理"
-	case SearchView:
-		return "全局搜索"
-	default:
-		return "未知"
-	}
-}
-
-func (m *Model) renderProjectListWithStats() string {
-	listView := m.projectList.View()
-	statsView := m.statsPanel.View()
-	if m.projectStatsCompact {
-		compact := strings.TrimSpace(m.statsPanel.CompactView())
-		if compact == "" {
-			return listView
-		}
-		dividerWidth := m.width
-		if dividerWidth <= 0 {
-			dividerWidth = 60
-		}
-		divider := strings.Repeat("─", dividerWidth)
-		return fmt.Sprintf("%s\n%s\n%s", compact, divider, listView)
-	}
-	if strings.TrimSpace(statsView) == "" {
-		return listView
-	}
-	if m.projectSplitVertical {
-		return lipgloss.JoinVertical(lipgloss.Left, listView, statsView)
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, listView, statsView)
+	return m.styles.AppContainer.Render(content)
 }

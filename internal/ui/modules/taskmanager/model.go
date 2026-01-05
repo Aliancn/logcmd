@@ -13,13 +13,16 @@ import (
 	"github.com/aliancn/logcmd/internal/tasks"
 	"github.com/aliancn/logcmd/internal/tasks/operations"
 	"github.com/aliancn/logcmd/internal/ui/common"
+	"github.com/aliancn/logcmd/internal/ui/components/panel"
 )
 
 // Model 展示后台任务列表。
 type Model struct {
 	manager          *tasks.Manager
 	list             list.Model
+	panel            *panel.Panel
 	keys             keyMap
+	theme            common.Theme
 	styles           common.Styles
 	width            int
 	height           int
@@ -42,8 +45,7 @@ type taskActionMsg struct {
 }
 
 // New 创建任务管理模块。
-func New(manager *tasks.Manager) Model {
-	styles := common.DefaultStyles()
+func New(manager *tasks.Manager, theme common.Theme, styles common.Styles) Model {
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
 
@@ -52,17 +54,23 @@ func New(manager *tasks.Manager) Model {
 	l.Styles.Title = styles.Title
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
-	l.SetShowHelp(true)
+	// 使用Panel自定义footer展示快捷键及状态，避免list默认帮助重复
+	l.SetShowHelp(false)
 
 	keys := newKeyMap()
 	l.AdditionalShortHelpKeys = func() []key.Binding {
 		return []key.Binding{keys.Refresh, keys.Stop, keys.Kill}
 	}
 
+	// 创建Panel布局容器
+	p := panel.NewDefault("", theme, styles)
+
 	return Model{
 		manager:         manager,
 		list:            l,
+		panel:           p,
 		keys:            keys,
+		theme:           theme,
 		styles:          styles,
 		refreshInterval: 5 * time.Second,
 	}
@@ -77,15 +85,32 @@ func (m Model) Init() tea.Cmd {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	w := width - 4
-	h := height - 4
-	if w < 40 {
-		w = width
+
+	// 更新footer（如果有状态消息则显示，否则显示帮助）
+	var footer string
+	if m.statusMsg != "" {
+		footer = m.styles.StatusBar.Render(m.statusMsg)
+	} else {
+		footer = m.styles.StatusBar.Render("r 刷新 · s 停止 · k 终止 · tab 返回")
 	}
-	if h < 5 {
-		h = height
+	m.panel.SetFooter(footer)
+
+	// 设置Panel尺寸，Panel会自动计算内容区域（已扣除footer）
+	m.panel.SetSize(width, height)
+
+	// 获取Panel计算后的精确内容尺寸
+	contentW, contentH := m.panel.GetContentSize()
+
+	// 确保最小尺寸
+	if contentW < 40 {
+		contentW = 40
 	}
-	m.list.SetSize(w, h)
+	if contentH < 5 {
+		contentH = 5
+	}
+
+	// 设置list使用精确的内容尺寸
+	m.list.SetSize(contentW, contentH)
 }
 
 // SetActive 控制刷新生命周期。
@@ -150,14 +175,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 // View 渲染任务列表。
 func (m Model) View() string {
-	body := m.list.View()
+	// 确保footer是最新的
 	var footer string
 	if m.statusMsg != "" {
 		footer = m.styles.StatusBar.Render(m.statusMsg)
 	} else {
 		footer = m.styles.StatusBar.Render("r 刷新 · s 停止 · k 终止 · tab 返回")
 	}
-	return m.styles.Frame.Render(body + "\n\n" + footer)
+	m.panel.SetFooter(footer)
+
+	// 使用Panel渲染list内容
+	return m.panel.Render(m.list.View())
 }
 
 func (m Model) selectedTask() *model.Task {

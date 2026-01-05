@@ -5,12 +5,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/aliancn/logcmd/internal/ui/common"
-	"github.com/aliancn/logcmd/internal/ui/modules/historylist"
-	"github.com/aliancn/logcmd/internal/ui/modules/logviewer"
-	"github.com/aliancn/logcmd/internal/ui/modules/projectlist"
 )
 
-// Update 是根 Model 的 Update 实现。
+// Update 是根Model的Update实现（新架构）
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -18,186 +15,129 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = typed.Width, typed.Height
 		m.ready = true
-		listWidth, statsWidth, vertical, compact := m.projectLayout()
-		m.projectSplitVertical = vertical
-		m.projectStatsCompact = compact
-		if compact {
-			m.projectList.SetSize(m.width, m.height)
-			m.statsPanel.SetSize(m.width, 0)
-		} else if vertical {
-			half := m.height / 2
-			if half < 1 {
-				half = m.height
-			}
-			m.projectList.SetSize(m.width, half)
-			m.statsPanel.SetSize(m.width, half)
-		} else {
-			m.projectList.SetSize(listWidth, m.height)
-			m.statsPanel.SetSize(statsWidth, m.height)
-		}
-		m.historyList.SetSize(m.width, m.height)
-		m.logViewer.SetSize(m.width, m.height)
-		m.taskList.SetSize(m.width, m.height)
-		m.searchView.SetSize(m.width, m.height)
+
+		// 计算Main区域尺寸
+		mainWidth, mainHeight := m.calculateMainAreaSize()
+
+		// 分发尺寸到所有组件
+		// m.header.SetSize(m.width)
+		m.tabBar.SetSize(m.width)
+		m.footer.SetSize(m.width)
+		m.cmdPalette.SetSize(m.width, m.height)
+
+		// 分发尺寸到所有Tab容器
+		m.projectsTab.SetSize(mainWidth, mainHeight)
+		m.tasksTab.SetSize(mainWidth, mainHeight)
+		m.searchTab.SetSize(mainWidth, mainHeight)
+		m.analyticsTab.SetSize(mainWidth, mainHeight)
+
 	case tea.KeyMsg:
+		// 处理全局快捷键
 		if m.handleGlobalKey(typed, &cmds) {
 			break
 		}
-	case projectlist.ProjectSelectedMsg:
-		m.state = HistoryListView
-		m.historyList.SetProject(typed.Project)
-		cmds = append(cmds, m.historyList.LoadHistoryCmd())
-	case historylist.BackToProjectsMsg:
-		m.state = ProjectListView
-		m.logViewer.Reset()
-	case historylist.OpenLogMsg:
-		m.state = LogViewerView
-		m.logViewer.SetHistory(typed.History)
-		cmds = append(cmds, m.logViewer.LoadContentCmd())
-	case logviewer.BackMsg:
-		m.state = HistoryListView
-	case logviewer.ContentLoadedMsg:
-		// 由 logviewer 自身处理
-	case projectlist.ProjectDeletedMsg:
-		if m.historyList.CurrentProjectID() == typed.ProjectID {
-			m.state = ProjectListView
-			m.historyList.SetProject(nil)
-			m.logViewer.Reset()
+
+	case common.SwitchTabMsg:
+		// 处理Tab切换消息
+		if typed.Index >= 0 && typed.Index < 4 {
+			m.activeTabIndex = typed.Index
+			m.tabBar.SetActive(typed.Index)
+			m.updateBreadcrumbs()
+			// m.header.SetBreadcrumbs(m.breadcrumbs)
 		}
+
+	case common.UpdateBreadcrumbsMsg:
+		// 更新面包屑
+		m.breadcrumbs = typed.Items
+		// m.header.SetBreadcrumbs(m.breadcrumbs)
+
+	case common.ShowCommandPaletteMsg:
+		// 显示Command Palette
+		m.showCmdPalette = true
+		m.cmdPalette.Activate()
+
+	case common.HideCommandPaletteMsg:
+		// 隐藏Command Palette
+		m.showCmdPalette = false
+		m.cmdPalette.Deactivate()
+
 	case common.ErrorMsg:
 		m.err = typed.Err
 	}
 
-	var cmd tea.Cmd
-	switch m.state {
-	case ProjectListView:
-		m.projectList, cmd = m.projectList.Update(msg)
-	case HistoryListView:
-		m.historyList, cmd = m.historyList.Update(msg)
-	case LogViewerView:
-		m.logViewer, cmd = m.logViewer.Update(msg)
-	case TaskListView:
-		m.taskList, cmd = m.taskList.Update(msg)
-	case SearchView:
-		m.searchView, cmd = m.searchView.Update(msg)
+	// 如果Command Palette激活，优先路由消息给它
+	if m.showCmdPalette {
+		var cmd tea.Cmd
+		m.cmdPalette, cmd = m.cmdPalette.Update(msg)
+		cmds = append(cmds, cmd)
+	} else {
+		// 否则路由消息到当前激活的Tab
+		var cmd tea.Cmd
+		switch m.activeTabIndex {
+		case 0: // Projects Tab
+			m.projectsTab, cmd = m.projectsTab.Update(msg)
+		case 1: // Tasks Tab
+			m.tasksTab, cmd = m.tasksTab.Update(msg)
+		case 2: // Search Tab
+			m.searchTab, cmd = m.searchTab.Update(msg)
+		case 3: // Analytics Tab
+			m.analyticsTab, cmd = m.analyticsTab.Update(msg)
+		}
+		cmds = append(cmds, cmd)
 	}
-	cmds = append(cmds, cmd)
-
-	m.statsPanel, cmd = m.statsPanel.Update(msg)
-	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
 }
 
+// handleGlobalKey 处理全局快捷键
 func (m *Model) handleGlobalKey(keyMsg tea.KeyMsg, cmds *[]tea.Cmd) bool {
 	switch {
 	case key.Matches(keyMsg, m.globalKeys.Quit):
+		// Ctrl+C 退出
 		*cmds = append(*cmds, tea.Quit)
 		return true
-	case key.Matches(keyMsg, m.globalKeys.Back):
-		switch m.state {
-		case HistoryListView:
-			*cmds = append(*cmds, func() tea.Msg { return historylist.BackToProjectsMsg{} })
-		case LogViewerView:
-			*cmds = append(*cmds, func() tea.Msg { return logviewer.BackMsg{} })
-		case TaskListView:
-			if cmd := m.exitTaskView(); cmd != nil {
-				*cmds = append(*cmds, cmd)
-			}
-		case SearchView:
-			if cmd := m.exitSearchView(); cmd != nil {
-				*cmds = append(*cmds, cmd)
-			}
-		default:
-			// 在项目列表中忽略
-		}
+
+	case keyMsg.String() == "1":
+		// 切换到Tab 1（项目）
+		*cmds = append(*cmds, func() tea.Msg {
+			return common.SwitchTabMsg{Index: 0}
+		})
 		return true
-	case key.Matches(keyMsg, m.globalKeys.Task):
-		if m.state == TaskListView {
-			if cmd := m.exitTaskView(); cmd != nil {
-				*cmds = append(*cmds, cmd)
-			}
-		} else {
-			if cmd := m.enterTaskView(); cmd != nil {
-				*cmds = append(*cmds, cmd)
-			}
-		}
+
+	case keyMsg.String() == "2":
+		// 切换到Tab 2（任务）
+		*cmds = append(*cmds, func() tea.Msg {
+			return common.SwitchTabMsg{Index: 1}
+		})
 		return true
-	case key.Matches(keyMsg, m.globalKeys.Search):
-		if m.state == LogViewerView {
-			return false
-		}
-		if m.state == SearchView {
-			if cmd := m.exitSearchView(); cmd != nil {
-				*cmds = append(*cmds, cmd)
-			}
+
+	case keyMsg.String() == "3":
+		// 切换到Tab 3（搜索）
+		*cmds = append(*cmds, func() tea.Msg {
+			return common.SwitchTabMsg{Index: 2}
+		})
+		return true
+
+	case keyMsg.String() == "4":
+		// 切换到Tab 4（统计）
+		*cmds = append(*cmds, func() tea.Msg {
+			return common.SwitchTabMsg{Index: 3}
+		})
+		return true
+
+	case keyMsg.String() == "ctrl+p":
+		// Ctrl+P 显示/隐藏Command Palette
+		if m.showCmdPalette {
+			*cmds = append(*cmds, func() tea.Msg {
+				return common.HideCommandPaletteMsg{}
+			})
 		} else {
-			if cmd := m.enterSearchView(); cmd != nil {
-				*cmds = append(*cmds, cmd)
-			}
+			*cmds = append(*cmds, func() tea.Msg {
+				return common.ShowCommandPaletteMsg{}
+			})
 		}
 		return true
 	}
+
 	return false
-}
-
-func (m *Model) enterTaskView() tea.Cmd {
-	m.prevState = m.state
-	m.state = TaskListView
-	return m.taskList.SetActive(true)
-}
-
-func (m *Model) exitTaskView() tea.Cmd {
-	if m.state != TaskListView {
-		return nil
-	}
-	target := m.prevState
-	if target == TaskListView {
-		target = ProjectListView
-	}
-	m.state = target
-	return m.taskList.SetActive(false)
-}
-
-func (m *Model) enterSearchView() tea.Cmd {
-	m.prevState = m.state
-	m.searchView.SetCurrentProject(m.projectList.SelectedProject())
-	m.state = SearchView
-	return m.searchView.Activate()
-}
-
-func (m *Model) exitSearchView() tea.Cmd {
-	if m.state != SearchView {
-		return nil
-	}
-	target := m.prevState
-	if target == TaskListView || target == SearchView {
-		target = ProjectListView
-	}
-	m.state = target
-	return m.searchView.Deactivate()
-}
-
-func (m *Model) projectLayout() (listWidth, statsWidth int, vertical, compact bool) {
-	if m.width <= 0 {
-		return 0, 0, false, false
-	}
-	if m.width < 90 {
-		return m.width, 0, false, true
-	}
-	if m.width < 110 {
-		return m.width, m.width, true, false
-	}
-	statsWidth = m.width / 3
-	if statsWidth < 30 {
-		statsWidth = 30
-	}
-	if statsWidth > m.width/2 {
-		statsWidth = m.width / 2
-	}
-	listWidth = m.width - statsWidth
-	if listWidth < 40 {
-		return m.width, 0, false, true
-	}
-	return listWidth, statsWidth, false, false
 }

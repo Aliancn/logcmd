@@ -12,6 +12,7 @@ import (
 	"github.com/aliancn/logcmd/internal/history"
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/ui/common"
+	"github.com/aliancn/logcmd/internal/ui/components/panel"
 )
 
 // Model 展示项目运行历史。
@@ -19,7 +20,9 @@ type Model struct {
 	manager *history.Manager
 	project *model.Project
 	list    list.Model
+	panel   *panel.Panel
 	keys    keyMap
+	theme   common.Theme
 	styles  common.Styles
 	width   int
 	height  int
@@ -41,8 +44,7 @@ type OpenLogMsg struct {
 }
 
 // New 创建历史列表 Model。
-func New(manager *history.Manager) Model {
-	styles := common.DefaultStyles()
+func New(manager *history.Manager, theme common.Theme, styles common.Styles) Model {
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
 
@@ -57,10 +59,15 @@ func New(manager *history.Manager) Model {
 		return []key.Binding{keys.Open, keys.Refresh, keys.Filter}
 	}
 
+	// 创建Panel布局容器
+	p := panel.NewDefault("", theme, styles)
+
 	model := Model{
 		manager: manager,
 		list:    l,
+		panel:   p,
 		keys:    keys,
+		theme:   theme,
 		styles:  styles,
 		filter:  filterAll,
 	}
@@ -84,15 +91,23 @@ func (m Model) Init() tea.Cmd {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	w := width - 4
-	h := height - 4
-	if w < 30 {
-		w = width
+
+	// 设置Panel尺寸，Panel会自动计算内容区域
+	m.panel.SetSize(width, height)
+
+	// 获取Panel计算后的精确内容尺寸
+	contentW, contentH := m.panel.GetContentSize()
+
+	// 确保最小尺寸
+	if contentW < 30 {
+		contentW = 30
 	}
-	if h < 5 {
-		h = height
+	if contentH < 5 {
+		contentH = 5
 	}
-	m.list.SetSize(w, h)
+
+	// 设置list使用精确的内容尺寸
+	m.list.SetSize(contentW, contentH)
 }
 
 // LoadHistoryCmd 触发历史加载。
@@ -162,9 +177,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // View 渲染列表。
 func (m Model) View() string {
 	if m.project == nil {
-		return m.styles.Frame.Render("在左侧选择一个项目以查看历史记录")
+		return m.panel.RenderEmpty("在左侧选择一个项目以查看历史记录")
 	}
-	return m.styles.Frame.Render(m.list.View())
+	return m.panel.Render(m.list.View())
 }
 
 type historyItem struct {

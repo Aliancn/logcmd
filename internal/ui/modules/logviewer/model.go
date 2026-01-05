@@ -10,18 +10,22 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/ui/common"
+	"github.com/aliancn/logcmd/internal/ui/components/panel"
 )
 
 // Model 展示日志内容。
 type Model struct {
 	viewport    viewport.Model
+	panel       *panel.Panel
 	history     *model.CommandHistory
 	content     string
 	width       int
 	height      int
+	theme       common.Theme
 	styles      common.Styles
 	keys        keyMap
 	searchInput textinput.Model
@@ -40,15 +44,19 @@ type ContentLoadedMsg struct {
 type BackMsg struct{}
 
 // New 创建日志查看器。
-func New() Model {
-	styles := common.DefaultStyles()
+func New(theme common.Theme, styles common.Styles) Model {
 	vp := viewport.New(0, 0)
 	input := textinput.New()
 	input.Prompt = "/ "
 	input.Placeholder = "输入搜索关键词"
 
+	// 创建Panel布局容器
+	p := panel.NewDefault("", theme, styles)
+
 	return Model{
 		viewport:    vp,
+		panel:       p,
+		theme:       theme,
 		styles:      styles,
 		keys:        newKeyMap(),
 		searchInput: input,
@@ -81,16 +89,53 @@ func (m *Model) Reset() {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	w := width - 4
-	h := height - 6
-	if w < 30 {
-		w = width
+
+	// 构建header
+	var header string
+	if m.history != nil {
+		headerStyle := lipgloss.NewStyle().Foreground(m.theme.Primary).Bold(true)
+		mutedStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+
+		var headerBuilder strings.Builder
+		headerBuilder.WriteString(headerStyle.Render(fmt.Sprintf("#%d %s", m.history.ID, m.history.Command)))
+		headerBuilder.WriteString("\n")
+		headerBuilder.WriteString(mutedStyle.Render(fmt.Sprintf("日志文件: %s", m.history.LogFilePath)))
+		headerBuilder.WriteString("\n")
+		headerBuilder.WriteString(mutedStyle.Render(fmt.Sprintf("开始时间: %s", m.history.StartTime.Format(time.RFC3339))))
+		header = headerBuilder.String()
 	}
-	if h < 5 {
-		h = height - 2
+
+	// 构建footer
+	var footer string
+	if m.searching {
+		footer = m.searchInput.View()
+	} else if m.statusMsg != "" {
+		footer = m.styles.StatusBar.Render(m.statusMsg)
+	} else {
+		footer = m.styles.StatusBar.Render("j/k 滚动 · gg/G 跳转 · / 搜索")
 	}
-	m.viewport.Width = w
-	m.viewport.Height = h
+
+	// 设置Panel的header和footer
+	m.panel.SetHeader(header)
+	m.panel.SetFooter(footer)
+
+	// 设置Panel尺寸，Panel会自动计算内容区域（已扣除header和footer）
+	m.panel.SetSize(width, height)
+
+	// 获取Panel计算后的精确内容尺寸
+	contentW, contentH := m.panel.GetContentSize()
+
+	// 确保最小尺寸
+	if contentW < 30 {
+		contentW = 30
+	}
+	if contentH < 5 {
+		contentH = 5
+	}
+
+	// 设置viewport使用精确的内容尺寸
+	m.viewport.Width = contentW
+	m.viewport.Height = contentH
 }
 
 // LoadContentCmd 读取日志文件。
@@ -177,35 +222,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // View 渲染日志。
 func (m Model) View() string {
 	if m.history == nil {
-		return m.styles.Frame.Render("选择一条历史记录查看日志")
+		return m.panel.RenderEmpty("选择一条历史记录查看日志")
 	}
 
-	header := fmt.Sprintf("#%d %s\n日志文件: %s\n开始时间: %s\n",
-		m.history.ID,
-		m.history.Command,
-		m.history.LogFilePath,
-		m.history.StartTime.Format(time.RFC3339),
-	)
-
-	body := m.viewport.View()
-
-	var footer string
-	if m.searching {
-		footer = m.searchInput.View()
-	} else if m.statusMsg != "" {
-		footer = m.styles.StatusBar.Render(m.statusMsg)
-	} else {
-		footer = m.styles.StatusBar.Render("j/k 滚动 · gg/G 跳转 · / 搜索")
-	}
-
-	view := strings.Builder{}
-	view.WriteString(header)
-	view.WriteString("\n")
-	view.WriteString(body)
-	view.WriteString("\n")
-	view.WriteString(footer)
-
-	return m.styles.Frame.Render(view.String())
+	// 使用Panel渲染viewport内容
+	// header和footer已经在SetSize中设置好了
+	return m.panel.Render(m.viewport.View())
 }
 
 // jumpToQuery 在日志中查找文本。

@@ -7,76 +7,111 @@ import (
 	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/tasks"
 	"github.com/aliancn/logcmd/internal/ui/common"
-	"github.com/aliancn/logcmd/internal/ui/modules/historylist"
-	"github.com/aliancn/logcmd/internal/ui/modules/logviewer"
-	"github.com/aliancn/logcmd/internal/ui/modules/projectlist"
-	"github.com/aliancn/logcmd/internal/ui/modules/searchview"
-	"github.com/aliancn/logcmd/internal/ui/modules/statspanel"
-	"github.com/aliancn/logcmd/internal/ui/modules/taskmanager"
+	"github.com/aliancn/logcmd/internal/ui/components/commandpalette"
+	"github.com/aliancn/logcmd/internal/ui/components/footer"
+	"github.com/aliancn/logcmd/internal/ui/components/tabbar"
+	"github.com/aliancn/logcmd/internal/ui/tabs/analytics"
+	"github.com/aliancn/logcmd/internal/ui/tabs/projects"
+	"github.com/aliancn/logcmd/internal/ui/tabs/search"
+	tasksTab "github.com/aliancn/logcmd/internal/ui/tabs/tasks"
 )
 
-// SessionState 标识当前的界面状态。
-type SessionState int
-
-const (
-	// ProjectListView 展示项目列表。
-	ProjectListView SessionState = iota
-	// HistoryListView 展示选中项目的历史记录。
-	HistoryListView
-	// LogViewerView 展示某条记录的日志。
-	LogViewerView
-	// TaskListView 展示后台任务。
-	TaskListView
-	// SearchView 展示全局搜索界面。
-	SearchView
-)
-
-// Model 是 TUI 根 Model。
+// Model 是TUI根Model（新架构）
 type Model struct {
-	state      SessionState
-	prevState  SessionState
-	width      int
-	height     int
-	err        error
-	ready      bool
-	globalKeys common.GlobalKeyMap
-	styles     common.Styles
+	// 三段式布局组件
+	tabBar     tabbar.Model
+	footer     footer.Model
+	cmdPalette commandpalette.Model
 
+	// 4个Tab容器
+	projectsTab  projects.Model
+	tasksTab     tasksTab.Model
+	searchTab    search.Model
+	analyticsTab analytics.Model
+
+	// 全局状态
+	activeTabIndex int      // 当前激活的Tab索引（0-3）
+	showCmdPalette bool     // Command Palette显示状态（阶段4实现）
+	breadcrumbs    []string // 面包屑导航
+	width          int
+	height         int
+	ready          bool
+	err            error
+
+	// 依赖注入（保持不变）
 	registry   *registry.Registry
 	historyMgr *history.Manager
 	taskMgr    *tasks.Manager
 
-	projectList projectlist.Model
-	historyList historylist.Model
-	logViewer   logviewer.Model
-	taskList    taskmanager.Model
-	statsPanel  statspanel.Model
-	searchView  searchview.Model
-
-	projectSplitVertical bool
-	projectStatsCompact  bool
+	// 样式和配置
+	theme      common.Theme
+	styles     common.Styles
+	globalKeys common.GlobalKeyMap
 }
 
-// NewRootModel 创建根 Model。
+// NewRootModel 创建根Model（新架构）
 func NewRootModel(reg *registry.Registry, historyMgr *history.Manager, taskMgr *tasks.Manager) *Model {
-	styles := common.DefaultStyles()
+	theme := common.DefaultTheme()
+	styles := common.NewStyles(theme)
+
+	// 创建Command Palette并设置命令
+	cmdPalette := commandpalette.New(theme, styles)
+	cmdPalette.SetCommands(commandpalette.DefaultCommands())
+
 	return &Model{
-		state:       ProjectListView,
-		globalKeys:  common.NewGlobalKeyMap(),
-		styles:      styles,
-		registry:    reg,
-		historyMgr:  historyMgr,
-		taskMgr:     taskMgr,
-		projectList: projectlist.New(reg),
-		historyList: historylist.New(historyMgr),
-		logViewer:   logviewer.New(),
-		taskList:    taskmanager.New(taskMgr),
-		statsPanel:  statspanel.New(historyMgr),
-		searchView:  searchview.New(reg),
+		// 初始化全局组件
+		tabBar:     tabbar.New(theme, styles),
+		footer:     footer.New(theme, styles),
+		cmdPalette: cmdPalette,
+
+		// 初始化4个Tab容器
+		projectsTab:  projects.New(reg, historyMgr, theme, styles),
+		tasksTab:     tasksTab.New(taskMgr, theme, styles),
+		searchTab:    search.New(reg, theme, styles),
+		analyticsTab: analytics.New(historyMgr, theme, styles),
+
+		// 全局状态
+		activeTabIndex: 0, // 默认激活第一个Tab（项目）
+		showCmdPalette: false,
+		breadcrumbs:    []string{"Home", "项目"},
+
+		// 依赖注入
+		registry:   reg,
+		historyMgr: historyMgr,
+		taskMgr:    taskMgr,
+
+		// 样式和配置
+		theme:      theme,
+		styles:     styles,
+		globalKeys: common.NewGlobalKeyMap(),
 	}
 }
 
-// Init 初始化应用。
+// Init 初始化应用
 func (m *Model) Init() tea.Cmd {
-	return m.projectList.Init()
+	// 初始化第一个Tab（项目）
+	return m.projectsTab.Init()
+}
+
+// calculateMainAreaSize 计算Main区域的尺寸
+func (m *Model) calculateMainAreaSize() (width, height int) {
+	width = m.width
+	height = max(m.height-common.TotalOverhead, common.MinMainAreaHeight)
+	return
+}
+
+// updateBreadcrumbs 根据当前Tab更新面包屑
+func (m *Model) updateBreadcrumbs() {
+	switch m.activeTabIndex {
+	case 0:
+		m.breadcrumbs = m.projectsTab.GetBreadcrumbs()
+	case 1:
+		m.breadcrumbs = m.tasksTab.GetBreadcrumbs()
+	case 2:
+		m.breadcrumbs = m.searchTab.GetBreadcrumbs()
+	case 3:
+		m.breadcrumbs = m.analyticsTab.GetBreadcrumbs()
+	default:
+		m.breadcrumbs = []string{"Home"}
+	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/search"
 	"github.com/aliancn/logcmd/internal/ui/common"
+	"github.com/aliancn/logcmd/internal/ui/components/panel"
 )
 
 const (
@@ -84,6 +85,8 @@ func (i searchResultItem) FilterValue() string {
 // Model 管理全局搜索界面。
 type Model struct {
 	registry *registry.Registry
+	panel    *panel.Panel
+	theme    common.Theme
 	styles   common.Styles
 	width    int
 	height   int
@@ -109,9 +112,7 @@ type Model struct {
 }
 
 // New 创建搜索视图。
-func New(reg *registry.Registry) Model {
-	styles := common.DefaultStyles()
-
+func New(reg *registry.Registry, theme common.Theme, styles common.Styles) Model {
 	input := textinput.New()
 	input.Placeholder = "输入关键词后按 Enter 搜索"
 	input.Prompt = "> "
@@ -124,8 +125,13 @@ func New(reg *registry.Registry) Model {
 	results.SetFilteringEnabled(false)
 	results.SetShowPagination(true)
 
+	// 创建Panel布局容器
+	p := panel.NewDefault("", theme, styles)
+
 	return Model{
 		registry:      reg,
+		panel:         p,
+		theme:         theme,
 		styles:        styles,
 		keyword:       input,
 		results:       results,
@@ -144,15 +150,27 @@ func (m Model) Init() tea.Cmd {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	listWidth := width - 4
-	listHeight := height - 8
-	if listWidth < 30 {
-		listWidth = width
+
+	// 构建header（form）
+	header := m.renderForm()
+	m.panel.SetHeader(header)
+
+	// 设置Panel尺寸，Panel会自动计算内容区域（已扣除header）
+	m.panel.SetSize(width, height)
+
+	// 获取Panel计算后的精确内容尺寸
+	contentW, contentH := m.panel.GetContentSize()
+
+	// 确保最小尺寸
+	if contentW < 30 {
+		contentW = 30
 	}
-	if listHeight < 5 {
-		listHeight = height - 2
+	if contentH < 5 {
+		contentH = 5
 	}
-	m.results.SetSize(listWidth, listHeight)
+
+	// 设置results使用精确的内容尺寸
+	m.results.SetSize(contentW, contentH)
 }
 
 // Activate 激活搜索视图。
@@ -263,9 +281,10 @@ func (m Model) View() string {
 	if !m.active {
 		return ""
 	}
-	form := m.renderForm()
-	body := fmt.Sprintf("%s\n\n%s", form, m.results.View())
-	return m.styles.Frame.Render(body)
+
+	// 使用Panel渲染results内容
+	// header（form）已经在SetSize中设置好了
+	return m.panel.Render(m.results.View())
 }
 
 func (m *Model) handleKey(keyMsg tea.KeyMsg) (bool, tea.Cmd) {

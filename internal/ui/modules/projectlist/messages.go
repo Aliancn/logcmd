@@ -17,6 +17,12 @@ type ProjectDeletedMsg struct {
 	ProjectID int
 }
 
+// ProjectCreatedMsg 项目创建成功
+type ProjectCreatedMsg struct {
+	ID   int
+	Name string
+}
+
 // projectDeleteConfirmMsg 内部消息：开始删除确认流程
 type projectDeleteConfirmMsg struct {
 	project *model.Project

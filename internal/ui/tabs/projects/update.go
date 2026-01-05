@@ -7,7 +7,6 @@ import (
 	"github.com/aliancn/logcmd/internal/ui/modules/historylist"
 	"github.com/aliancn/logcmd/internal/ui/modules/logviewer"
 	"github.com/aliancn/logcmd/internal/ui/modules/projectlist"
-	"github.com/aliancn/logcmd/internal/ui/modules/statspanel"
 )
 
 // Update 更新Projects Tab
@@ -28,9 +27,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.state = HistoryListView
 		m.historyList.SetProject(typed.Project)
 		cmds = append(cmds, m.historyList.LoadHistoryCmd())
-		// 同时更新统计面板
-		m.statsPanel.SetProject(typed.Project)
-		cmds = append(cmds, m.statsPanel.LoadStatsCmd())
 		// 更新面包屑
 		cmds = append(cmds, func() tea.Msg {
 			return common.UpdateBreadcrumbsMsg{Items: m.GetBreadcrumbs()}
@@ -73,13 +69,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		// 重新加载项目列表
 		cmds = append(cmds, m.projectList.LoadProjectsCmd())
 
-	case statspanel.StatsLoadedMsg:
-		// 统计数据加载完成，传递给statsPanel
-		var model tea.Model
-		model, cmd = m.statsPanel.Update(msg)
-		m.statsPanel = model.(statspanel.Model)
-		cmds = append(cmds, cmd)
-
 	case common.ErrorMsg:
 		// 错误消息传递给根Model处理
 	}
@@ -88,19 +77,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch m.state {
 	case ProjectListView:
 		var model tea.Model
-		
-		// 1. 更新 ProjectList
 		model, cmd = m.projectList.Update(msg)
 		m.projectList = model.(projectlist.Model)
 		cmds = append(cmds, cmd)
-		
-		// 2. 更新 StatsPanel
-		model, cmd = m.statsPanel.Update(msg)
-		m.statsPanel = model.(statspanel.Model)
-		cmds = append(cmds, cmd)
-		
-		// 3. 同步最新的组件到 SplitView
-		m.splitView.SetChildren(&m.projectList, &m.statsPanel)
 
 	case HistoryListView:
 		m.historyList, cmd = m.historyList.Update(msg)

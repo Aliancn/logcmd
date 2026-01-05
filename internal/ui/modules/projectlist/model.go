@@ -3,6 +3,7 @@ package projectlist
 import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/aliancn/logcmd/internal/model"
@@ -18,11 +19,15 @@ type Model struct {
 	projects []*model.Project
 
 	// UI 组件
-	list  list.Model
-	panel *panel.Panel
+	list      list.Model
+	panel     *panel.Panel
+	pathInput textinput.Model
+	nameInput textinput.Model
 
 	// 状态
 	selectedIndex    int
+	isAdding         bool // 是否处于添加模式
+	addStep          int  // 0: path, 1: name
 	confirmingDelete bool
 	deleteTargetID   int
 	statusMsg        string
@@ -40,6 +45,7 @@ type Model struct {
 // keyMap 键盘绑定
 type keyMap struct {
 	Select  key.Binding
+	Add     key.Binding
 	Delete  key.Binding
 	Refresh key.Binding
 	Confirm key.Binding
@@ -51,19 +57,23 @@ func newKeyMap() keyMap {
 	return keyMap{
 		Select: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("enter", "选择项目"),
+			key.WithHelp("enter", "选择"),
+		),
+		Add: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("a", "添加"),
 		),
 		Delete: key.NewBinding(
 			key.WithKeys("d"),
-			key.WithHelp("d", "删除项目"),
+			key.WithHelp("d", "删除"),
 		),
 		Refresh: key.NewBinding(
 			key.WithKeys("r"),
-			key.WithHelp("r", "刷新列表"),
+			key.WithHelp("r", "刷新"),
 		),
 		Confirm: key.NewBinding(
-			key.WithKeys("y", "Y"),
-			key.WithHelp("y", "确认"),
+			key.WithKeys("y", "Y", "enter"), // Adding enter for form confirm
+			key.WithHelp("y/enter", "确认"),
 		),
 		Cancel: key.NewBinding(
 			key.WithKeys("n", "N", "esc"),
@@ -86,25 +96,37 @@ func New(reg *registry.Registry, theme common.Theme, styles common.Styles) Model
 
 	keys := newKeyMap()
 	l.AdditionalShortHelpKeys = func() []key.Binding {
-		return []key.Binding{keys.Select, keys.Delete, keys.Refresh}
+		return []key.Binding{keys.Select, keys.Add, keys.Delete}
 	}
+
+	// 创建 Inputs
+	tiPath := textinput.New()
+	tiPath.Placeholder = "/path/to/project"
+	tiPath.Focus()
+	tiPath.Width = 40
+
+	tiName := textinput.New()
+	tiName.Placeholder = "Project Name"
+	tiName.Width = 30
 
 	// 创建 Panel 布局容器
 	p := panel.NewDefault("", theme, styles)
 
 	return Model{
-		registry: reg,
-		list:     l,
-		panel:    p,
-		keys:     keys,
-		theme:    theme,
-		styles:   styles,
+		registry:  reg,
+		list:      l,
+		panel:     p,
+		pathInput: tiPath,
+		nameInput: tiName,
+		keys:      keys,
+		theme:     theme,
+		styles:    styles,
 	}
 }
 
 // Init 实现 tea.Model
 func (m Model) Init() tea.Cmd {
-	return nil
+	return m.LoadProjectsCmd()
 }
 
 // SetSize 调整组件大小
@@ -114,13 +136,15 @@ func (m *Model) SetSize(width, height int) {
 
 	// 构建 footer
 	var footer string
-	if m.confirmingDelete {
+	if m.isAdding {
+		footer = m.styles.StatusBar.Render("Tab 切换输入 · Enter 下一步/确认 · Esc 取消")
+	} else if m.confirmingDelete {
 		// 红色边框的确认提示
 		footer = m.styles.Error.Render(m.statusMsg)
 	} else if m.statusMsg != "" {
 		footer = m.styles.StatusBar.Render(m.statusMsg)
 	} else {
-		footer = m.styles.StatusBar.Render("↑/↓ 导航 · Enter 选择 · d 删除 · r 刷新")
+		footer = m.styles.StatusBar.Render("↑/↓ 导航 · Enter 选择 · a 添加 · d 删除 · r 刷新")
 	}
 	m.panel.SetFooter(footer)
 

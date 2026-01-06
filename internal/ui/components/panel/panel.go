@@ -3,8 +3,8 @@ package panel
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/aliancn/logcmd/internal/ui/common"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Panel 统一的布局容器，负责边框、padding和尺寸计算
@@ -113,7 +113,6 @@ func (p *Panel) calculateContentSize() {
 	if p.footer != "" {
 		footerLines := blockHeight(p.footer)
 		contentH -= footerLines
-		contentH -= 1 // 内容和footer之间的分隔行
 	}
 
 	// 确保最小尺寸
@@ -147,7 +146,9 @@ func (p *Panel) Render(content string) string {
 
 	// 添加footer（如果有）
 	if p.footer != "" {
-		finalContent += "\n" + p.footer
+		// 确保footer占满宽度且背景一致
+		footerStyle := p.styles.StatusBar.Copy().Width(p.contentWidth)
+		finalContent += "\n" + footerStyle.Render(p.footer)
 	}
 
 	// 计算内部可用高度 (Total - Border)
@@ -169,10 +170,12 @@ func (p *Panel) Render(content string) string {
 	// 应用边框和padding样式
 	style := lipgloss.NewStyle()
 
+	innerWidth := p.width
 	if p.showBorder {
 		style = style.
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(p.theme.BorderActive)
+		innerWidth -= 2
 	}
 
 	if p.showPadding {
@@ -182,6 +185,11 @@ func (p *Panel) Render(content string) string {
 	// 强制高度，确保布局对齐
 	if innerHeight > 0 {
 		style = style.Height(innerHeight)
+	}
+
+	// 强制宽度，确保布局占满
+	if innerWidth > 0 {
+		style = style.Width(innerWidth)
 	}
 
 	// 渲染并返回

@@ -109,10 +109,13 @@ func (m *Model) SetSize(width, height int) {
 	var footer string
 	if m.searching {
 		footer = m.searchInput.View()
-	} else if m.statusMsg != "" {
-		footer = m.styles.StatusBar.Render(m.statusMsg)
 	} else {
-		footer = m.styles.StatusBar.Render("j/k 滚动 · gg/G 跳转 · / 搜索")
+		defaultHints := "j/k 滚动 · gg/G 跳转 · / 搜索"
+		if m.statusMsg != "" {
+			footer = common.JoinKeyHelps(m.statusMsg, defaultHints)
+		} else {
+			footer = defaultHints
+		}
 	}
 
 	// 设置Panel的header和footer

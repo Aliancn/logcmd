@@ -33,7 +33,7 @@ func (m *Model) View() string {
 		mainView = m.styles.Error.Render("未知Tab")
 	}
 
-	// 4. 渲染Footer
+	// 4. 渲染Footer（全局快捷键提示固定展示）
 	footerView := m.footer.View()
 
 	// 5. 组合三段式布局

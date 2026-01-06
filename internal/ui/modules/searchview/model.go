@@ -120,6 +120,8 @@ func New(reg *registry.Registry, theme common.Theme, styles common.Styles) Model
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
 	results := list.New(nil, delegate, 0, 0)
+	// 搜索结果列表禁用默认退出键，避免 Esc 触发 Quit
+	results.DisableQuitKeybindings()
 	results.Title = "搜索结果"
 	results.SetShowStatusBar(false)
 	results.SetFilteringEnabled(false)
@@ -171,6 +173,9 @@ func (m *Model) SetSize(width, height int) {
 
 	// 设置results使用精确的内容尺寸
 	m.results.SetSize(contentW, contentH)
+
+	// 仅提示该视图特有的快捷键
+	m.panel.SetFooter("Ctrl+O 浏览结果 · / 编辑关键词")
 }
 
 // Activate 激活搜索视图。
@@ -194,6 +199,12 @@ func (m *Model) Deactivate() tea.Cmd {
 	m.inputFocused = false
 	m.loading = false
 	return nil
+}
+
+// FocusInput 让搜索输入框重新获得焦点
+func (m *Model) FocusInput() tea.Cmd {
+	m.inputFocused = true
+	return m.keyword.Focus()
 }
 
 // SetCurrentProject 设置默认搜索项目。

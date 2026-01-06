@@ -30,13 +30,14 @@ type Model struct {
 	analyticsTab analytics.Model
 
 	// 全局状态
-	activeTabIndex int      // 当前激活的Tab索引（0-3）
-	showCmdPalette bool     // Command Palette显示状态（阶段4实现）
-	breadcrumbs    []string // 面包屑导航
-	width          int
-	height         int
-	ready          bool
-	err            error
+	activeTabIndex      int      // 当前激活的Tab索引（0-3）
+	lastNonTaskTabIndex int      // Tab快捷键返回的目标索引
+	showCmdPalette      bool     // Command Palette显示状态（阶段4实现）
+	breadcrumbs         []string // 面包屑导航
+	width               int
+	height              int
+	ready               bool
+	err                 error
 
 	// 依赖注入（保持不变）
 	registry   *registry.Registry
@@ -53,6 +54,9 @@ type Model struct {
 func NewRootModel(reg *registry.Registry, historyMgr *history.Manager, taskMgr *tasks.Manager) *Model {
 	theme := common.DefaultTheme()
 	styles := common.NewStyles(theme)
+	globalKeys := common.NewGlobalKeyMap()
+	footerModel := footer.New(theme, styles)
+	footerModel.SetHints(common.GlobalFooterHints(globalKeys))
 
 	// 创建Command Palette并设置命令
 	cmdPalette := commandpalette.New(theme, styles)
@@ -61,7 +65,7 @@ func NewRootModel(reg *registry.Registry, historyMgr *history.Manager, taskMgr *
 	return &Model{
 		// 初始化全局组件
 		tabBar:     tabbar.New(theme, styles),
-		footer:     footer.New(theme, styles),
+		footer:     footerModel,
 		cmdPalette: cmdPalette,
 
 		// 初始化4个Tab容器
@@ -71,9 +75,10 @@ func NewRootModel(reg *registry.Registry, historyMgr *history.Manager, taskMgr *
 		analyticsTab: analytics.New(historyMgr, theme, styles),
 
 		// 全局状态
-		activeTabIndex: 0, // 默认激活第一个Tab（项目）
-		showCmdPalette: false,
-		breadcrumbs:    []string{"Home", "项目"},
+		activeTabIndex:      0, // 默认激活第一个Tab（项目）
+		lastNonTaskTabIndex: 0,
+		showCmdPalette:      false,
+		breadcrumbs:         []string{"Home", "项目"},
 
 		// 依赖注入
 		registry:   reg,
@@ -83,7 +88,7 @@ func NewRootModel(reg *registry.Registry, historyMgr *history.Manager, taskMgr *
 		// 样式和配置
 		theme:      theme,
 		styles:     styles,
-		globalKeys: common.NewGlobalKeyMap(),
+		globalKeys: globalKeys,
 	}
 }
 
@@ -114,4 +119,62 @@ func (m *Model) updateBreadcrumbs() {
 	default:
 		m.breadcrumbs = []string{"Home"}
 	}
+}
+
+func (m *Model) canTriggerTaskShortcut() bool {
+	if m.showCmdPalette {
+		return false
+	}
+	if m.activeTabIndex == 0 {
+		return m.projectsTab.AllowTaskShortcut()
+	}
+	return true
+}
+
+func (m *Model) taskShortcutTarget() int {
+	if m.activeTabIndex == 1 {
+		target := m.lastNonTaskTabIndex
+		if target == 1 || target < 0 || target > 3 {
+			return 0
+		}
+		return target
+	}
+	if m.activeTabIndex >= 0 && m.activeTabIndex < 4 {
+		m.lastNonTaskTabIndex = m.activeTabIndex
+	}
+	return 1
+}
+
+func (m *Model) handleTaskBack(cmds *[]tea.Cmd) bool {
+	if m.activeTabIndex != 1 || m.showCmdPalette {
+		return false
+	}
+	target := m.taskShortcutTarget()
+	if target == 1 {
+		target = 0
+	}
+	*cmds = append(*cmds, func() tea.Msg {
+		return common.SwitchTabMsg{Index: target}
+	})
+	return true
+}
+
+func (m *Model) handleTabDeactivated(index int) tea.Cmd {
+	switch index {
+	case 1:
+		return m.tasksTab.OnDeactivated()
+	case 2:
+		return m.searchTab.OnDeactivated()
+	}
+	return nil
+}
+
+func (m *Model) handleTabActivated(index int) tea.Cmd {
+	switch index {
+	case 1:
+		return m.tasksTab.OnActivated()
+	case 2:
+		return m.searchTab.OnActivated()
+	}
+	return nil
 }

@@ -23,11 +23,6 @@ type UpdateBreadcrumbsMsg struct {
 	Items []string // 面包屑路径项
 }
 
-// UpdateFooterHintsMsg Footer提示更新消息
-type UpdateFooterHintsMsg struct {
-	Hints []KeyHint // 快捷键提示列表
-}
-
 // Command Palette相关消息
 
 // ShowCommandPaletteMsg 显示Command Palette

@@ -48,15 +48,13 @@ type projectItem struct {
 
 func (i projectItem) Title() string {
 	p := i.project
-	icon := getStatusIcon(p.GetSuccessRate())
 	
 	category := ""
 	if p.Category != "" {
 		category = fmt.Sprintf(" (%s)", p.Category)
 	}
 
-	return fmt.Sprintf("%s %s%s",
-		icon,
+	return fmt.Sprintf("%s%s",
 		p.Name,
 		category,
 	)
@@ -93,18 +91,6 @@ func (i projectItem) Description() string {
 
 func (i projectItem) FilterValue() string {
 	return i.project.Name + " " + i.project.Path + " " + i.project.Category + " " + strings.Join(i.project.Tags, " ")
-}
-
-// getStatusIcon 根据成功率获取图标
-func getStatusIcon(successRate float64) string {
-	if successRate >= 90.0 {
-		return "🟢" // High success
-	} else if successRate >= 70.0 {
-		return "🟡" // Medium
-	} else if successRate > 0 {
-		return "🔴" // Low/Error
-	}
-	return "⚪" // No data
 }
 
 // formatRelativeTime 格式化相对时间

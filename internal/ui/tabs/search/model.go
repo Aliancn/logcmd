@@ -46,3 +46,18 @@ func (m *Model) SetSize(width, height int) {
 func (m Model) GetBreadcrumbs() []string {
 	return []string{"Home", "搜索"}
 }
+
+// OnActivated 激活搜索Tab时聚焦输入框
+func (m *Model) OnActivated() tea.Cmd {
+	return m.searchView.Activate()
+}
+
+// OnDeactivated 离开搜索Tab时取消激活
+func (m *Model) OnDeactivated() tea.Cmd {
+	return m.searchView.Deactivate()
+}
+
+// FocusInput 重新聚焦搜索输入框
+func (m *Model) FocusInput() tea.Cmd {
+	return m.searchView.FocusInput()
+}

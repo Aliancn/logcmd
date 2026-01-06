@@ -46,3 +46,13 @@ func (m *Model) SetSize(width, height int) {
 func (m Model) GetBreadcrumbs() []string {
 	return []string{"Home", "任务"}
 }
+
+// OnActivated 激活Tasks Tab时启动刷新
+func (m *Model) OnActivated() tea.Cmd {
+	return m.taskList.SetActive(true)
+}
+
+// OnDeactivated 离开Tasks Tab时停止刷新
+func (m *Model) OnDeactivated() tea.Cmd {
+	return m.taskList.SetActive(false)
+}

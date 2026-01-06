@@ -53,6 +53,8 @@ func New(theme common.Theme, styles common.Styles) Model {
 	delegate.ShowDescription = true
 
 	l := list.New([]list.Item{}, delegate, 0, 0)
+	// 禁用列表内置退出键，Esc 行为由Command Palette控制
+	l.DisableQuitKeybindings()
 	l.Title = ""
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)

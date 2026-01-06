@@ -66,10 +66,10 @@ func (m Model) Init() tea.Cmd {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	
+
 	// 项目列表占满全屏
 	m.projectList.SetSize(width, height)
-	
+
 	// 其他视图使用全尺寸
 	m.historyList.SetSize(width, height)
 	m.logViewer.SetSize(width, height)
@@ -87,4 +87,12 @@ func (m Model) GetBreadcrumbs() []string {
 	default:
 		return []string{"Home", "项目"}
 	}
+}
+
+// AllowTaskShortcut 当前状态下是否允许使用Tab快捷键跳转到任务视图
+func (m Model) AllowTaskShortcut() bool {
+	if m.state != ProjectListView {
+		return true
+	}
+	return m.projectList.CanUseGlobalShortcuts()
 }

@@ -50,6 +50,8 @@ func New(manager *tasks.Manager, theme common.Theme, styles common.Styles) Model
 	delegate.ShowDescription = true
 
 	l := list.New(nil, delegate, 0, 0)
+	// 禁用默认退出键，统一由上层处理 Esc/Quit
+	l.DisableQuitKeybindings()
 	l.Title = "后台任务"
 	l.Styles.Title = styles.Title
 	l.SetShowStatusBar(false)
@@ -88,10 +90,18 @@ func (m *Model) SetSize(width, height int) {
 
 	// 更新footer（如果有状态消息则显示，否则显示帮助）
 	var footer string
+	defaultHints := common.JoinKeyHelps(
+		common.FormatKeyHelp(m.keys.Refresh),
+		common.FormatKeyHelp(m.keys.Stop),
+		common.FormatKeyHelp(m.keys.Kill),
+	)
 	if m.statusMsg != "" {
-		footer = m.styles.StatusBar.Render(m.statusMsg)
+		footer = common.JoinKeyHelps(m.statusMsg, defaultHints)
 	} else {
-		footer = m.styles.StatusBar.Render("r 刷新 · s 停止 · k 终止 · tab 返回")
+		footer = defaultHints
+	}
+	if footer == "" {
+		footer = defaultHints
 	}
 	m.panel.SetFooter(footer)
 
@@ -176,13 +186,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // View 渲染任务列表。
 func (m Model) View() string {
 	// 确保footer是最新的
-	var footer string
+	defaultHints := common.JoinKeyHelps(
+		common.FormatKeyHelp(m.keys.Refresh),
+		common.FormatKeyHelp(m.keys.Stop),
+		common.FormatKeyHelp(m.keys.Kill),
+	)
 	if m.statusMsg != "" {
-		footer = m.styles.StatusBar.Render(m.statusMsg)
+		m.panel.SetFooter(common.JoinKeyHelps(m.statusMsg, defaultHints))
 	} else {
-		footer = m.styles.StatusBar.Render("r 刷新 · s 停止 · k 终止 · tab 返回")
+		m.panel.SetFooter(defaultHints)
 	}
-	m.panel.SetFooter(footer)
 
 	// 使用Panel渲染list内容
 	return m.panel.Render(m.list.View())

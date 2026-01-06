@@ -89,10 +89,13 @@ func New(reg *registry.Registry, theme common.Theme, styles common.Styles) Model
 	delegate.ShowDescription = true
 
 	l := list.New(nil, delegate, 0, 0)
+	// 禁用列表内置的退出快捷键，统一交给全局处理 Esc/Quit
+	l.DisableQuitKeybindings()
 	l.Title = "项目列表"
 	l.Styles.Title = styles.Title
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
+	l.SetShowHelp(false)
 
 	keys := newKeyMap()
 	l.AdditionalShortHelpKeys = func() []key.Binding {
@@ -136,15 +139,31 @@ func (m *Model) SetSize(width, height int) {
 
 	// 构建 footer
 	var footer string
+	defaultHints := common.JoinKeyHelps(
+		common.FormatKeyHelp(m.keys.Select),
+		common.FormatKeyHelp(m.keys.Add),
+		common.FormatKeyHelp(m.keys.Delete),
+		common.FormatKeyHelp(m.keys.Refresh),
+	)
 	if m.isAdding {
-		footer = m.styles.StatusBar.Render("Tab 切换输入 · Enter 下一步/确认 · Esc 取消")
+		footer = common.JoinKeyHelps(
+			"tab 切换输入",
+			common.FormatKeyHelp(m.keys.Confirm),
+			common.FormatKeyHelp(m.keys.Cancel),
+		)
 	} else if m.confirmingDelete {
-		// 红色边框的确认提示
-		footer = m.styles.Error.Render(m.statusMsg)
+		footer = common.JoinKeyHelps(
+			m.statusMsg,
+			common.FormatKeyHelp(m.keys.Confirm),
+			common.FormatKeyHelp(m.keys.Cancel),
+		)
 	} else if m.statusMsg != "" {
-		footer = m.styles.StatusBar.Render(m.statusMsg)
+		footer = common.JoinKeyHelps(m.statusMsg, defaultHints)
 	} else {
-		footer = m.styles.StatusBar.Render("↑/↓ 导航 · Enter 选择 · a 添加 · d 删除 · r 刷新")
+		footer = defaultHints
+	}
+	if footer == "" {
+		footer = defaultHints
 	}
 	m.panel.SetFooter(footer)
 
@@ -180,4 +199,9 @@ func (m Model) CurrentProject() *model.Project {
 		return item.project
 	}
 	return nil
+}
+
+// CanUseGlobalShortcuts 返回项目列表是否允许全局快捷键（如Tab切换）
+func (m Model) CanUseGlobalShortcuts() bool {
+	return !m.isAdding
 }

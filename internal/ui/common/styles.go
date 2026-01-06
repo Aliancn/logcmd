@@ -11,20 +11,20 @@ type Styles struct {
 	Frame          lipgloss.Style // 框架样式（向后兼容）
 
 	// 文本样式
-	Title         lipgloss.Style // 标题文本
-	Subtitle      lipgloss.Style // 副标题文本
-	Success       lipgloss.Style // 成功状态文本
-	Warning       lipgloss.Style // 警告状态文本
-	Error         lipgloss.Style // 错误状态文本
-	Muted         lipgloss.Style // 次要文本
-	Highlight     lipgloss.Style // 高亮文本
-	Normal        lipgloss.Style // 普通文本
+	Title     lipgloss.Style // 标题文本
+	Subtitle  lipgloss.Style // 副标题文本
+	Success   lipgloss.Style // 成功状态文本
+	Warning   lipgloss.Style // 警告状态文本
+	Error     lipgloss.Style // 错误状态文本
+	Muted     lipgloss.Style // 次要文本
+	Highlight lipgloss.Style // 高亮文本
+	Normal    lipgloss.Style // 普通文本
 
 	// UI元素样式
-	StatusBar     lipgloss.Style // 状态栏
-	TabActive     lipgloss.Style // 激活的Tab标签
-	TabInactive   lipgloss.Style // 非激活的Tab标签
-	AppContainer  lipgloss.Style // 应用容器
+	StatusBar    lipgloss.Style // 状态栏
+	TabActive    lipgloss.Style // 激活的Tab标签
+	TabInactive  lipgloss.Style // 非激活的Tab标签
+	AppContainer lipgloss.Style // 应用容器
 
 	// 进度条和图表
 	ProgressFilled lipgloss.Style // 进度条填充部分
@@ -89,8 +89,7 @@ func NewStyles(theme Theme) Styles {
 
 		// UI元素样式
 		StatusBar: lipgloss.NewStyle().
-			Foreground(theme.Foreground).
-			Background(theme.StatusBar).
+			Foreground(lipgloss.Color("#000000")).
 			Padding(0, 1),
 
 		TabActive: lipgloss.NewStyle().

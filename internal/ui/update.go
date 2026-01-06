@@ -40,8 +40,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case common.SwitchTabMsg:
 		// 处理Tab切换消息
 		if typed.Index >= 0 && typed.Index < 4 {
+			if typed.Index == m.activeTabIndex {
+				break
+			}
+			prev := m.activeTabIndex
+			if cmd := m.handleTabDeactivated(prev); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if typed.Index == 1 && prev != 1 {
+				m.lastNonTaskTabIndex = prev
+			}
 			m.activeTabIndex = typed.Index
 			m.tabBar.SetActive(typed.Index)
+			if cmd := m.handleTabActivated(typed.Index); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 			m.updateBreadcrumbs()
 			// m.header.SetBreadcrumbs(m.breadcrumbs)
 		}
@@ -92,8 +105,43 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleGlobalKey 处理全局快捷键
 func (m *Model) handleGlobalKey(keyMsg tea.KeyMsg, cmds *[]tea.Cmd) bool {
 	switch {
+	case key.Matches(keyMsg, m.globalKeys.Back):
+		if m.handleTaskBack(cmds) {
+			return true
+		}
+		return false
+
+	case key.Matches(keyMsg, m.globalKeys.Task):
+		if !m.canTriggerTaskShortcut() {
+			return false
+		}
+		target := m.taskShortcutTarget()
+		*cmds = append(*cmds, func() tea.Msg {
+			return common.SwitchTabMsg{Index: target}
+		})
+		return true
+
+	case key.Matches(keyMsg, m.globalKeys.Search):
+		if m.showCmdPalette {
+			return false
+		}
+		if m.activeTabIndex == 2 {
+			if cmd := m.searchTab.FocusInput(); cmd != nil {
+				*cmds = append(*cmds, cmd)
+			}
+		} else {
+			*cmds = append(*cmds, func() tea.Msg {
+				return common.SwitchTabMsg{Index: 2}
+			})
+		}
+		return true
+
 	case key.Matches(keyMsg, m.globalKeys.Quit):
-		// Ctrl+C 退出
+		// 确保 Esc 不会触发退出（即使绑定匹配）
+		if keyMsg.Type == tea.KeyEsc || keyMsg.String() == "esc" {
+			return false
+		}
+		// Ctrl+C/q 退出
 		*cmds = append(*cmds, tea.Quit)
 		return true
 

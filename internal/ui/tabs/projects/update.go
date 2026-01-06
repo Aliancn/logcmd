@@ -82,6 +82,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 
 	case HistoryListView:
+		// 显式处理 Esc 返回，防止子模块处理异常或冒泡导致退出
+		if msg, ok := msg.(tea.KeyMsg); ok && msg.Type == tea.KeyEsc {
+			cmds = append(cmds, func() tea.Msg { return historylist.BackToProjectsMsg{} })
+			return m, tea.Batch(cmds...)
+		}
 		m.historyList, cmd = m.historyList.Update(msg)
 		cmds = append(cmds, cmd)
 

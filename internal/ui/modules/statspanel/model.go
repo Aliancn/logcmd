@@ -61,6 +61,7 @@ func (m Model) Init() tea.Cmd {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+	m.panel.SetFooter("当前视图暂无快捷键")
 
 	// 设置 Panel 尺寸
 	m.panel.SetSize(width, height)

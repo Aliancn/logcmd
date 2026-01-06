@@ -49,10 +49,13 @@ func New(manager *history.Manager, theme common.Theme, styles common.Styles) Mod
 	delegate.ShowDescription = true
 
 	l := list.New(nil, delegate, 0, 0)
+	// 禁用列表内置退出键，避免 Esc 被视作全局退出
+	l.DisableQuitKeybindings()
 	l.Title = "历史记录"
 	l.Styles.Title = styles.Title
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
+	l.SetShowHelp(false)
 
 	keys := newKeyMap()
 	l.AdditionalShortHelpKeys = func() []key.Binding {
@@ -108,6 +111,13 @@ func (m *Model) SetSize(width, height int) {
 
 	// 设置list使用精确的内容尺寸
 	m.list.SetSize(contentW, contentH)
+
+	// 仅展示此视图独有的快捷键
+	m.panel.SetFooter(common.JoinKeyHelps(
+		common.FormatKeyHelp(m.keys.Open),
+		common.FormatKeyHelp(m.keys.Refresh),
+		common.FormatKeyHelp(m.keys.Filter),
+	))
 }
 
 // LoadHistoryCmd 触发历史加载。
@@ -142,8 +152,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.SetSize(msg.Width, msg.Height)
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, m.keys.Back):
-			cmds = append(cmds, func() tea.Msg { return BackToProjectsMsg{} })
 		case key.Matches(msg, m.keys.Open):
 			if item, ok := m.list.SelectedItem().(historyItem); ok {
 				h := item.history
@@ -232,7 +240,6 @@ func statusSymbol(status string) string {
 }
 
 type keyMap struct {
-	Back    key.Binding
 	Open    key.Binding
 	Refresh key.Binding
 	Filter  key.Binding
@@ -240,10 +247,6 @@ type keyMap struct {
 
 func newKeyMap() keyMap {
 	return keyMap{
-		Back: key.NewBinding(
-			key.WithKeys("esc"),
-			key.WithHelp("esc", "返回项目"),
-		),
 		Open: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "查看日志"),

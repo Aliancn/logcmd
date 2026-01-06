@@ -54,6 +54,10 @@ LogCmd 内置数据库层，提供强大的数据管理和查询能力：
   - 命令分布和退出码分布
   - 趋势分析和汇总统计
   - JSON 导出功能
+- **持久化协调层**
+  - `internal/persistence` 复用 Registry 的数据库连接
+  - `RunRepository` 负责项目注册、命令历史写入与统计缓存刷新
+  - `StatsUpdater` 将 Logger 的统计增量统一路由到 Registry
 
 - **自动数据库迁移**
   - 程序启动时自动检测并创建所需表结构
@@ -510,6 +514,9 @@ logcmd/
 │   │   └── migration.go      # 迁移管理器
 │   ├── history/              # 命令历史管理
 │   │   └── manager.go        # 历史记录管理器
+│   ├── persistence/          # Logger 与数据库的解耦持久化层
+│   │   ├── run_repository.go # 负责项目注册与命令历史写入
+│   │   └── stats_updater.go  # Registry 统计更新适配器
 ├── examples/                 # 示例代码
 │   └── database_demo.go      # 数据库功能示例
 ├── docs/                     # 文档

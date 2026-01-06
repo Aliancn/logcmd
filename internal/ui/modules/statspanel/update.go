@@ -3,11 +3,11 @@ package statspanel
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/aliancn/logcmd/internal/history"
-	"github.com/aliancn/logcmd/internal/ui/common"
 )
 
 // Update 处理消息
@@ -18,15 +18,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SetProjectMsg:
 		m.SetProject(msg.Project)
-		return m, m.LoadStatsCmd()
+		return m, m.Refresh()
 
 	case StatsLoadedMsg:
-		if m.project == nil || msg.ProjectID != m.project.ID {
+		if msg.ProjectID != m.currentProjectID() {
 			break
 		}
 		m.commandDist = msg.CommandDist
 		// 计算 Top 5 命令
 		m.topCommands = calculateTopCommands(m.commandDist, 5)
+		m.summary = msg.Summary
+		m.failures = msg.RecentFailures
+		m.lastUpdated = msg.GeneratedAt
+		m.loading = false
+		m.err = nil
+	case statsFailedMsg:
+		if msg.ProjectID != m.currentProjectID() {
+			break
+		}
+		m.loading = false
+		m.err = msg.Err
 	}
 
 	return m, nil
@@ -34,11 +45,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // LoadStatsCmd 加载统计数据
 func (m Model) LoadStatsCmd() tea.Cmd {
-	if m.project == nil || m.historyMgr == nil {
+	if m.historyMgr == nil {
 		return nil
 	}
 
-	projectID := m.project.ID
+	projectID := m.currentProjectID()
 
 	return func() tea.Msg {
 		// 查询项目的历史记录
@@ -47,27 +58,65 @@ func (m Model) LoadStatsCmd() tea.Cmd {
 			Limit:     500, // 取最近 500 条
 		})
 		if err != nil {
-			return common.ErrorMsg{Err: fmt.Errorf("加载统计失败: %w", err)}
+			return statsFailedMsg{ProjectID: projectID, Err: fmt.Errorf("加载统计失败: %w", err)}
 		}
 
 		// 统计命令分布
 		dist := make(map[string]int)
+		var stats statsSummary
+		var failures []recentFailure
+		var durationTotal time.Duration
+
 		for _, h := range histories {
-			cmdName := strings.TrimSpace(h.CommandName)
-			if cmdName == "" {
-				// 如果没有 CommandName，使用完整命令
-				cmdName = h.Command
-				// 截取前 30 个字符作为命令名
-				if len(cmdName) > 30 {
-					cmdName = cmdName[:30]
+			cmdName := normalizeCommandName(h.CommandName, h.Command)
+			dist[cmdName]++
+
+			stats.Total++
+			if strings.EqualFold(h.Status, "success") {
+				stats.Success++
+			} else {
+				stats.Failed++
+				if len(failures) < 4 {
+					failures = append(failures, recentFailure{
+						ProjectID: h.ProjectID,
+						Command:   cmdName,
+						Status:    h.Status,
+						ExitCode:  h.ExitCode,
+						StartedAt: h.StartTime,
+						Duration:  h.GetDuration(),
+					})
 				}
 			}
-			dist[cmdName]++
+			durationTotal += h.GetDuration()
+		}
+
+		if stats.Total > 0 {
+			stats.AvgDuration = time.Duration(int64(durationTotal) / int64(stats.Total))
+		}
+		if len(histories) > 0 {
+			stats.LastRun = histories[0].StartTime
 		}
 
 		return StatsLoadedMsg{
-			ProjectID:   projectID,
-			CommandDist: dist,
+			ProjectID:      projectID,
+			CommandDist:    dist,
+			Summary:        stats,
+			RecentFailures: failures,
+			GeneratedAt:    time.Now(),
 		}
 	}
+}
+
+func normalizeCommandName(name, fallback string) string {
+	cmdName := strings.TrimSpace(name)
+	if cmdName == "" {
+		cmdName = strings.TrimSpace(fallback)
+		if len(cmdName) > 30 {
+			cmdName = cmdName[:30]
+		}
+	}
+	if cmdName == "" {
+		return "未知命令"
+	}
+	return cmdName
 }

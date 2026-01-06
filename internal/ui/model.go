@@ -165,6 +165,8 @@ func (m *Model) handleTabDeactivated(index int) tea.Cmd {
 		return m.tasksTab.OnDeactivated()
 	case 2:
 		return m.searchTab.OnDeactivated()
+	case 3:
+		return m.analyticsTab.OnDeactivated()
 	}
 	return nil
 }
@@ -175,6 +177,8 @@ func (m *Model) handleTabActivated(index int) tea.Cmd {
 		return m.tasksTab.OnActivated()
 	case 2:
 		return m.searchTab.OnActivated()
+	case 3:
+		return m.analyticsTab.OnActivated()
 	}
 	return nil
 }

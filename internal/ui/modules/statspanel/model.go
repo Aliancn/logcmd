@@ -1,6 +1,8 @@
 package statspanel
 
 import (
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/aliancn/logcmd/internal/history"
@@ -18,6 +20,9 @@ type Model struct {
 	// 统计数据缓存
 	commandDist map[string]int
 	topCommands []CommandStat
+	summary     statsSummary
+	failures    []recentFailure
+	lastUpdated time.Time
 
 	// UI 组件
 	panel *panel.Panel
@@ -29,12 +34,32 @@ type Model struct {
 	// 依赖
 	theme  common.Theme
 	styles common.Styles
+
+	loading bool
+	err     error
 }
 
 // CommandStat 命令统计项
 type CommandStat struct {
 	Command string
 	Count   int
+}
+
+type statsSummary struct {
+	Total       int
+	Success     int
+	Failed      int
+	AvgDuration time.Duration
+	LastRun     time.Time
+}
+
+type recentFailure struct {
+	ProjectID int
+	Command   string
+	Status    string
+	ExitCode  int
+	StartedAt time.Time
+	Duration  time.Duration
 }
 
 // New 创建统计面板
@@ -49,6 +74,7 @@ func New(historyMgr *history.Manager, theme common.Theme, styles common.Styles) 
 		styles:      styles,
 		commandDist: make(map[string]int),
 		topCommands: make([]CommandStat, 0),
+		failures:    make([]recentFailure, 0),
 	}
 }
 
@@ -73,4 +99,22 @@ func (m *Model) SetProject(project *model.Project) {
 	// 清空之前的统计数据
 	m.commandDist = make(map[string]int)
 	m.topCommands = make([]CommandStat, 0)
+	m.summary = statsSummary{}
+	m.failures = make([]recentFailure, 0)
+	m.lastUpdated = time.Time{}
+	m.err = nil
+}
+
+// Refresh 主动刷新统计数据
+func (m *Model) Refresh() tea.Cmd {
+	m.loading = true
+	m.err = nil
+	return m.LoadStatsCmd()
+}
+
+func (m Model) currentProjectID() int {
+	if m.project == nil {
+		return 0
+	}
+	return m.project.ID
 }

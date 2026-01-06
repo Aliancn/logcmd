@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/registry"
@@ -34,6 +37,7 @@ type searchFinishedMsg struct {
 	QueryID int
 	Items   []searchResultItem
 	Summary string
+	Stats   searchSummary
 }
 
 type searchFailedMsg struct {
@@ -44,6 +48,15 @@ type searchFailedMsg struct {
 type searchResultItem struct {
 	project *model.Project
 	result  *search.SearchResult
+}
+
+type searchSummary struct {
+	Query        string
+	MatchCount   int
+	ProjectCount int
+	Duration     time.Duration
+	Limited      bool
+	ExecutedAt   time.Time
 }
 
 func (i searchResultItem) Title() string {
@@ -94,6 +107,7 @@ type Model struct {
 
 	keyword       textinput.Model
 	results       list.Model
+	statusSpinner spinner.Model
 	keys          keyMap
 	contextValues []int
 
@@ -107,6 +121,8 @@ type Model struct {
 	currentProject *model.Project
 	status         string
 	loading        bool
+	lastExecuted   time.Time
+	lastStats      *searchSummary
 	err            error
 	queryID        int
 }
@@ -130,6 +146,11 @@ func New(reg *registry.Registry, theme common.Theme, styles common.Styles) Model
 	// 创建Panel布局容器
 	p := panel.NewDefault("", theme, styles)
 
+	spin := spinner.New(
+		spinner.WithSpinner(spinner.Dot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(theme.Primary)),
+	)
+
 	return Model{
 		registry:      reg,
 		panel:         p,
@@ -137,6 +158,7 @@ func New(reg *registry.Registry, theme common.Theme, styles common.Styles) Model
 		styles:        styles,
 		keyword:       input,
 		results:       results,
+		statusSpinner: spin,
 		keys:          newKeyMap(),
 		contextValues: []int{0, 2, 5},
 		status:        "输入关键词后按 Enter 搜索",
@@ -264,6 +286,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.loading = false
 		m.err = nil
 		m.status = typed.Summary
+		stats := typed.Stats
+		m.lastStats = &stats
+		m.lastExecuted = stats.ExecutedAt
 		items := make([]list.Item, len(typed.Items))
 		for i, item := range typed.Items {
 			items[i] = item
@@ -276,6 +301,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.loading = false
 		m.err = typed.Err
 		m.status = fmt.Sprintf("搜索失败: %v", typed.Err)
+		m.lastExecuted = time.Now()
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.statusSpinner, cmd = m.statusSpinner.Update(typed)
+		if m.loading && cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	if _, ok := msg.(tea.KeyMsg); !ok {
@@ -295,6 +328,7 @@ func (m Model) View() string {
 
 	// 使用Panel渲染results内容
 	// header（form）已经在SetSize中设置好了
+	m.panel.SetHeader(m.renderForm())
 	return m.panel.Render(m.results.View())
 }
 
@@ -351,7 +385,10 @@ func (m *Model) startSearch() tea.Cmd {
 		SearchAll:     m.searchAll || m.currentProject == nil,
 		Project:       m.currentProject,
 	}
-	return m.searchCmd(params)
+	return tea.Batch(
+		m.searchCmd(params),
+		m.statusSpinner.Tick,
+	)
 }
 
 func (m Model) loadProjectsCmd() tea.Cmd {
@@ -380,6 +417,7 @@ type searchParams struct {
 func (m Model) searchCmd(params searchParams) tea.Cmd {
 	reg := m.registry
 	return func() tea.Msg {
+		started := time.Now()
 		var targets []*model.Project
 		if params.SearchAll {
 			if reg == nil {
@@ -436,6 +474,18 @@ func (m Model) searchCmd(params searchParams) tea.Cmd {
 		}
 
 		summary := fmt.Sprintf("匹配 %d 条 · 项目 %d 个", len(matches), len(targets))
+		limited := len(matches) >= maxSearchResults
+		if limited {
+			summary = fmt.Sprintf("%s · 仅显示前 %d 条", summary, maxSearchResults)
+		}
+		stats := searchSummary{
+			Query:        params.Keyword,
+			MatchCount:   len(matches),
+			ProjectCount: len(targets),
+			Duration:     time.Since(started),
+			Limited:      limited,
+			ExecutedAt:   time.Now(),
+		}
 		if len(matches) == 0 {
 			summary = "未找到匹配"
 		}
@@ -444,6 +494,7 @@ func (m Model) searchCmd(params searchParams) tea.Cmd {
 			QueryID: params.QueryID,
 			Items:   matches,
 			Summary: summary,
+			Stats:   stats,
 		}
 	}
 }
@@ -454,20 +505,20 @@ func (m Model) renderForm() string {
 		scope = fmt.Sprintf("当前项目 (#%d)", m.currentProject.ID)
 	}
 	contextLabel := fmt.Sprintf("%d 行", m.contextValues[m.contextIndex])
-	status := m.status
-	if m.loading {
-		status = "正在搜索..."
+	chips := []string{
+		m.renderChip("Regex", boolLabel(m.regex)),
+		m.renderChip("Case", boolLabel(m.caseSensitive)),
+		m.renderChip("范围", scope),
+		m.renderChip("上下文", contextLabel),
 	}
-	line := fmt.Sprintf(
-		"Regex:%s  Case:%s  范围:%s  上下文:%s  状态:%s",
-		boolLabel(m.regex),
-		boolLabel(m.caseSensitive),
-		scope,
-		contextLabel,
-		status,
-	)
+	status := m.renderStatusLine()
 	help := "Enter 搜索 · r 正则 · c 大小写 · a 范围 · x 上下文 · / 编辑 · ctrl+o 浏览结果"
-	return fmt.Sprintf("%s\n%s\n%s", m.keyword.View(), line, help)
+	return strings.Join([]string{
+		m.keyword.View(),
+		strings.Join(chips, " "),
+		status,
+		help,
+	}, "\n")
 }
 
 func boolLabel(v bool) string {
@@ -551,4 +602,61 @@ func newKeyMap() keyMap {
 			key.WithHelp("ctrl+o", "浏览结果"),
 		),
 	}
+}
+
+func (m Model) renderChip(label, value string) string {
+	chipStyle := lipgloss.NewStyle().
+		Background(m.theme.StatusBar).
+		Foreground(m.theme.Foreground).
+		Padding(0, 1).
+		MarginRight(1)
+	labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	valueStyle := lipgloss.NewStyle().Bold(true)
+	return chipStyle.Render(fmt.Sprintf("%s %s",
+		labelStyle.Render(label+":"),
+		valueStyle.Render(value),
+	))
+}
+
+func (m Model) renderStatusLine() string {
+	if m.loading {
+		scope := "全部项目"
+		if !m.searchAll && m.currentProject != nil {
+			scope = fmt.Sprintf("项目 #%d", m.currentProject.ID)
+		}
+		return fmt.Sprintf("%s 正在搜索 %s...", m.statusSpinner.View(), scope)
+	}
+	if m.err != nil {
+		status := fmt.Sprintf("搜索失败: %v", m.err)
+		if !m.lastExecuted.IsZero() {
+			status = fmt.Sprintf("%s · %s", status, m.lastExecuted.Format("15:04:05"))
+		}
+		return status
+	}
+	if m.lastStats != nil {
+		stats := m.lastStats
+		parts := []string{
+			fmt.Sprintf("匹配 %d 条", stats.MatchCount),
+			fmt.Sprintf("项目 %d 个", stats.ProjectCount),
+			fmt.Sprintf("耗时 %s", formatDuration(stats.Duration)),
+		}
+		if stats.Limited {
+			parts = append(parts, fmt.Sprintf("仅显示前 %d 条", maxSearchResults))
+		}
+		if !stats.ExecutedAt.IsZero() {
+			parts = append(parts, fmt.Sprintf("上次 %s", stats.ExecutedAt.Format("15:04:05")))
+		}
+		return strings.Join(parts, " · ")
+	}
+	return m.status
+}
+
+func formatDuration(d time.Duration) string {
+	if d >= time.Second {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	if d >= time.Millisecond {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return "即时"
 }

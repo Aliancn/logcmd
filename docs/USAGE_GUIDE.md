@@ -19,6 +19,13 @@
 - Stats 模块中的 CacheManager 以日期为粒度缓存聚合数据：每日命令总数、成功率、平均/最大/最小时长，以及命令分布、退出码分布。
 - 当 CLI 需要跨日期统计时，优先读取缓存；若缓存缺失，可触发后台生成流程并回填。
 
+## 命令执行与持久化流程
+1. `logcmd run`/`task worker` 初始化 Registry 后，会构造 `persistence.RunRepository` 与 `StatsUpdater`，并注入 Logger。
+2. Logger 决定日志路径后，通过 `RunRepository.RegisterProject` 确保 `.logcmd` 目录被注册，并获取项目 ID。
+3. 命令执行结束时，`RunRepository.RecordRun` 写入 `command_history` 并即时调用 `stats.CacheManager.GenerateForDate` 刷新缓存。
+4. `StatsUpdater.UpdateProjectStats` 负责调用 `registry.UpdateStats`，保证 CLI、后台任务与未来的 UI 模块走同一条统计更新路径。
+5. 全流程仅使用 Registry 暴露的数据库连接，复用迁移和连接池配置，避免重复打开 SQLite。
+
 ## 维护操作
 - `registry.CheckAndCleanup()` 负责周期性清理不存在的项目目录，并刷新 `last_checked`。
 - 历史和统计模块提供按日期或保留周期删除旧数据的能力，避免数据库无限增长。

@@ -46,3 +46,13 @@ func (m *Model) SetSize(width, height int) {
 func (m Model) GetBreadcrumbs() []string {
 	return []string{"Home", "统计"}
 }
+
+// OnActivated 激活统计Tab时刷新数据
+func (m *Model) OnActivated() tea.Cmd {
+	return m.statsPanel.Refresh()
+}
+
+// OnDeactivated 离开统计Tab时占位
+func (m *Model) OnDeactivated() tea.Cmd {
+	return nil
+}

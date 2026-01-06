@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -12,80 +13,153 @@ import (
 
 // View 渲染视图
 func (m Model) View() string {
-	if m.project == nil {
-		return m.panel.RenderEmpty("选择一个项目查看统计")
+	m.panel.SetHeader(m.renderHeader())
+
+	switch {
+	case m.historyMgr == nil:
+		return m.panel.RenderEmpty("历史记录不可用")
+	case m.loading:
+		return m.panel.Render(m.styles.Muted.Render("正在加载统计数据..."))
+	case m.err != nil:
+		return m.panel.Render(m.styles.Error.Render(fmt.Sprintf("加载失败: %v", m.err)))
 	}
 
-	var content strings.Builder
+	var sections []string
 
-	// 标题
-	titleStyle := lipgloss.NewStyle().
-		Foreground(m.theme.Primary).
-		Bold(true).
-		PaddingBottom(1)
-	content.WriteString(titleStyle.Render(fmt.Sprintf("项目 #%d 统计", m.project.ID)))
-	content.WriteString("\n\n")
-
-	// 基本统计
-	successRate := m.project.GetSuccessRate()
-	successRateStyle := m.getSuccessRateStyle(successRate)
-
-	stats := []struct {
-		Label string
-		Value string
-		Style lipgloss.Style
-	}{
-		{"成功率", fmt.Sprintf("%.1f%%", successRate), successRateStyle},
-		{"总执行", fmt.Sprintf("%d", m.project.TotalCommands), lipgloss.NewStyle().Foreground(m.theme.Foreground)},
-		{"成功", fmt.Sprintf("%d", m.project.SuccessCommands), lipgloss.NewStyle().Foreground(m.theme.Success)},
-		{"失败", fmt.Sprintf("%d", m.project.FailedCommands), lipgloss.NewStyle().Foreground(m.theme.Error)},
+	if m.summary.Total == 0 && len(m.topCommands) == 0 {
+		return m.panel.RenderEmpty("暂无统计数据")
 	}
 
-	for _, stat := range stats {
-		labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
-		line := fmt.Sprintf("%s: %s",
-			labelStyle.Render(stat.Label),
-			stat.Style.Render(stat.Value),
-		)
-		content.WriteString(line)
-		content.WriteString("\n")
+	if summary := m.renderSummarySection(); summary != "" {
+		sections = append(sections, summary)
 	}
 
-	// 命令分布
-	if len(m.topCommands) > 0 {
-		content.WriteString("\n")
-		divider := lipgloss.NewStyle().
-			Foreground(m.theme.Border).
-			Render(strings.Repeat("─", m.width-4))
-		content.WriteString(divider)
-		content.WriteString("\n\n")
-
-		headerStyle := lipgloss.NewStyle().
-			Foreground(m.theme.Primary).
-			Bold(true)
-		content.WriteString(headerStyle.Render("常用命令"))
-		content.WriteString("\n\n")
-
-		// ASCII bar chart
-		chartWidth := m.width - 8 // 减去 padding 和边框
-		if chartWidth < 20 {
-			chartWidth = 20
-		}
-		chart := renderBarChart(m.topCommands, chartWidth, m.theme)
-		content.WriteString(chart)
+	if failures := m.renderFailuresSection(); failures != "" {
+		sections = append(sections, failures)
 	}
 
-	return m.panel.Render(content.String())
+	if commands := m.renderCommandSection(); commands != "" {
+		sections = append(sections, commands)
+	}
+
+	content := strings.Join(sections, "\n\n")
+	return m.panel.Render(content)
 }
 
-// getSuccessRateStyle 根据成功率返回样式
-func (m Model) getSuccessRateStyle(rate float64) lipgloss.Style {
-	if rate >= 80.0 {
-		return lipgloss.NewStyle().Foreground(m.theme.Success)
-	} else if rate >= 50.0 {
-		return lipgloss.NewStyle().Foreground(m.theme.Warning)
+func (m Model) renderSummarySection() string {
+	title := lipgloss.NewStyle().
+		Foreground(m.theme.Primary).
+		Bold(true).
+		Render(m.summaryTitle())
+
+	if m.summary.Total == 0 {
+		return title + "\n" + m.styles.Muted.Render("暂无执行记录")
 	}
-	return lipgloss.NewStyle().Foreground(m.theme.Error)
+
+	metrics := []struct {
+		label string
+		value string
+		style lipgloss.Style
+	}{
+		{"总执行", fmt.Sprintf("%d", m.summary.Total), lipgloss.NewStyle().Foreground(m.theme.Foreground)},
+		{"成功", fmt.Sprintf("%d", m.summary.Success), lipgloss.NewStyle().Foreground(m.theme.Success)},
+		{"失败", fmt.Sprintf("%d", m.summary.Failed), lipgloss.NewStyle().Foreground(m.theme.Error)},
+		{"成功率", fmt.Sprintf("%.1f%%", m.summary.successRate()), lipgloss.NewStyle().Foreground(m.theme.Primary)},
+		{"平均耗时", formatDurationShort(m.summary.AvgDuration), lipgloss.NewStyle().Foreground(m.theme.TextMuted)},
+		{"最近执行", formatTimeShort(m.summary.LastRun), lipgloss.NewStyle().Foreground(m.theme.TextMuted)},
+	}
+
+	var lines []string
+	for i := 0; i < len(metrics); i += 3 {
+		end := i + 3
+		if end > len(metrics) {
+			end = len(metrics)
+		}
+		chunk := metrics[i:end]
+		var parts []string
+		for _, metric := range chunk {
+			label := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render(metric.label + ":")
+			value := metric.style.Bold(true).Render(metric.value)
+			parts = append(parts, lipgloss.NewStyle().Width(20).Render(fmt.Sprintf("%s %s", label, value)))
+		}
+		lines = append(lines, strings.Join(parts, "  "))
+	}
+
+	body := strings.Join(lines, "\n")
+	return fmt.Sprintf("%s\n%s", title, body)
+}
+
+func (m Model) renderFailuresSection() string {
+	if len(m.failures) == 0 {
+		return ""
+	}
+
+	title := lipgloss.NewStyle().
+		Foreground(m.theme.Warning).
+		Bold(true).
+		Render("最近失败")
+
+	var rows []string
+	for _, f := range m.failures {
+		project := fmt.Sprintf("项目#%d", f.ProjectID)
+		cmd := lipgloss.NewStyle().Bold(true).Render(f.Command)
+		status := lipgloss.NewStyle().Foreground(m.theme.Error).Render(strings.ToUpper(f.Status))
+		meta := fmt.Sprintf("%s · %s · 耗时 %s · 退出码 %d",
+			project,
+			formatTimeShort(f.StartedAt),
+			formatDurationShort(f.Duration),
+			f.ExitCode,
+		)
+		rows = append(rows, fmt.Sprintf("%s  %s\n%s", status, cmd, lipgloss.NewStyle().Foreground(m.theme.TextMuted).Render(meta)))
+	}
+
+	return fmt.Sprintf("%s\n%s", title, strings.Join(rows, "\n\n"))
+}
+
+func (m Model) renderCommandSection() string {
+	if len(m.topCommands) == 0 {
+		return ""
+	}
+
+	header := lipgloss.NewStyle().
+		Foreground(m.theme.Primary).
+		Bold(true).
+		Render("常用命令")
+
+	chartWidth := m.width - 8
+	if chartWidth < 20 {
+		chartWidth = 20
+	}
+	chart := renderBarChart(m.topCommands, chartWidth, m.theme)
+
+	return fmt.Sprintf("%s\n\n%s", header, chart)
+}
+
+func (m Model) summaryTitle() string {
+	if m.project != nil {
+		return fmt.Sprintf("项目 #%d 运行状态", m.project.ID)
+	}
+	return "全局运行状态"
+}
+
+func (m statsSummary) successRate() float64 {
+	if m.Total == 0 {
+		return 0
+	}
+	return float64(m.Success) / float64(m.Total) * 100
+}
+
+func (m Model) renderHeader() string {
+	var title string
+	if m.project != nil {
+		title = fmt.Sprintf("统计 · 项目 #%d", m.project.ID)
+	} else {
+		title = "统计 · 全局"
+	}
+	if !m.lastUpdated.IsZero() {
+		title = fmt.Sprintf("%s · 更新 %s", title, m.lastUpdated.Format("15:04:05"))
+	}
+	return title
 }
 
 // renderBarChart 渲染 ASCII bar chart
@@ -172,4 +246,21 @@ func calculateTopCommands(dist map[string]int, n int) []CommandStat {
 	}
 
 	return stats
+}
+
+func formatDurationShort(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	if d >= time.Second {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dms", d.Milliseconds())
+}
+
+func formatTimeShort(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Format("01-02 15:04")
 }

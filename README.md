@@ -28,10 +28,18 @@
   - 懒更新检查机制
 - **高性能日志记录**: 使用流式处理和缓冲 I/O，支持大输出量命令
 - **实时输出**: 命令输出实时显示在终端，同时保存到日志文件
+- **交互式 TUI**: 现代化的终端用户界面
+  - **仪表盘**: 实时概览系统负载、任务状态和报警信息
+  - **任务管理**: 分屏显示进程列表与详细信息，支持实时日志预览
+  - **命令面板**: 全局模糊搜索命令，快速直达功能
+  - **日志浏览器**: 语法高亮、快速过滤、时间轴视图
 - **智能组织**: 日志文件按日期自动分文件夹存储 (`.logcmd/2024-01-15/log_20240115_143052.log`)
 - **丰富元数据**: 记录命令、参数、执行时间、时长、退出码等信息
 - **强大搜索**: 支持关键词搜索、正则表达式、日期范围筛选、上下文显示、跨项目搜索
 - **统计分析**: 提供命令执行次数、成功率、耗时、每日统计等多维度分析、支持跨项目统计
+- **安全增强**: 
+  - **执行白名单**: 可配置允许执行的命令列表，防止恶意操作
+  - **路径清洗**: 智能处理文件名，防止路径穿越和非法字符
 - **跨平台**: 支持 Linux、macOS、Windows
 
 ### 数据库能力
@@ -63,7 +71,7 @@ LogCmd 内置数据库层，提供强大的数据管理和查询能力：
   - 程序启动时自动检测并创建所需表结构
   - 兼容历史数据并保留日志文件格式
 
-**了解更多**: [数据库增强功能文档](./docs/DATABASE_ENHANCEMENT_README.md)
+**了解更多**: [数据库架构设计](./docs/DATABASE_ARCHITECTURE.md)
 
 ## 安装
 
@@ -144,6 +152,9 @@ logcmd run python train.py --epochs 100
 logcmd run -d npm start
 logcmd task list
 logcmd task stop 1
+
+# 启动交互式界面 (TUI)
+logcmd ui
 ```
 
 日志文件格式：`.logcmd/YYYY-MM-DD/log_YYYYMMDD_HHMMSS.log`
@@ -289,6 +300,39 @@ logcmd stats -all
 ```
 
 跨项目统计会自动清理不存在的项目。
+
+## 配置指南
+
+LogCmd 支持通过 `~/.logcmd/config.json` 进行全局配置。
+
+### 示例配置
+
+```json
+{
+  "buffer_size": 8192,
+  "auto_compress": false,
+  "time_format": "20060102_150405",
+  "flush_interval_ms": 200,
+  "whitelist": [
+    "npm",
+    "make",
+    "go",
+    "python",
+    "docker"
+  ],
+  "max_retention_days": 30,
+  "max_retention_count": 1000
+}
+```
+
+### 配置项说明
+
+- **buffer_size**: 日志写入缓冲区大小（字节），默认 8192。
+- **flush_interval_ms**: 日志刷新间隔（毫秒），默认 200ms。
+- **whitelist**: 命令执行白名单。
+- **max_retention_days**: 自动清理超过指定天数的日志（0 表示不限制）。
+- **max_retention_count**: 自动保留最近 N 条记录（0 表示不限制）。
+- **auto_compress**: 是否自动压缩旧日志（暂未实现）。
 
 ## 使用示例
 
@@ -520,9 +564,7 @@ logcmd/
 ├── examples/                 # 示例代码
 │   └── database_demo.go      # 数据库功能示例
 ├── docs/                     # 文档
-│   ├── DATABASE_DESIGN.md    # 数据库设计文档
-│   ├── USAGE_GUIDE.md        # 使用指南
-│   └── DATABASE_ENHANCEMENT_README.md  # 增强功能说明
+│   └── DATABASE_ARCHITECTURE.md  # 数据库架构设计
 ├── go.mod
 ├── go.sum
 ├── Makefile

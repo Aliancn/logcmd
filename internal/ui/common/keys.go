@@ -11,7 +11,6 @@ import (
 type GlobalKeyMap struct {
 	Quit   key.Binding
 	Back   key.Binding
-	Task   key.Binding
 	Search key.Binding
 }
 
@@ -26,10 +25,6 @@ func NewGlobalKeyMap() GlobalKeyMap {
 			key.WithKeys("esc"),
 			key.WithHelp("esc", "返回"),
 		),
-		Task: key.NewBinding(
-			key.WithKeys("tab"),
-			key.WithHelp("tab", "任务视图"),
-		),
 		Search: key.NewBinding(
 			key.WithKeys("ctrl+f"),
 			key.WithHelp("ctrl+f", "全局搜索"),
@@ -39,7 +34,7 @@ func NewGlobalKeyMap() GlobalKeyMap {
 
 // ShortHelp 返回展示用快捷键列表。
 func (k GlobalKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Back, k.Task, k.Search, k.Quit}
+	return []key.Binding{k.Back, k.Search, k.Quit}
 }
 
 // FormatKeyHelp 返回 binding 的“键 描述”字符串。
@@ -77,7 +72,7 @@ func DefaultFooterHints() []KeyHint {
 
 // GlobalFooterHints 根据给定的全局按键映射返回Footer提示。
 func GlobalFooterHints(keys GlobalKeyMap) []KeyHint {
-	hints := KeyHintsFromBindings(keys.Back, keys.Task, keys.Search)
+	hints := KeyHintsFromBindings(keys.Back, keys.Search)
 	hints = append(hints,
 		KeyHint{Key: "1-4", Desc: "切换Tab"},
 		KeyHint{Key: "Ctrl+P", Desc: "命令面板"},

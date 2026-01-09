@@ -258,16 +258,47 @@ Line 5`
 		t.Error("Context 不应为空")
 	}
 
-	// 验证上下文包含匹配的行
-	found := false
-	for _, line := range result.Context {
-		if strings.Contains(line, "test") {
-			found = true
-			break
-		}
+	if result.MatchLineIndex < 0 || result.MatchLineIndex >= len(result.Context) {
+		t.Fatalf("MatchLineIndex 越界: %d", result.MatchLineIndex)
 	}
-	if !found {
-		t.Error("Context 应该包含匹配的行")
+
+	matchLine := result.Context[result.MatchLineIndex]
+	if !strings.Contains(matchLine, "test") {
+		t.Errorf("MatchLineIndex 未定位到包含关键字的行: %s", matchLine)
+	}
+}
+
+func TestSearchMatchLineIndexWithoutContext(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	logContent := "Line 1: test keyword"
+	logPath := filepath.Join(tmpDir, "test.log")
+	if err := os.WriteFile(logPath, []byte(logContent), 0644); err != nil {
+		t.Fatalf("创建测试日志文件失败: %v", err)
+	}
+
+	options := &search.SearchOptions{
+		LogDir:      tmpDir,
+		Keyword:     "test",
+		ShowContext: 0,
+	}
+
+	searcher, err := search.New(options)
+	if err != nil {
+		t.Fatalf("New() 失败: %v", err)
+	}
+
+	results, err := collectResults(t, searcher, context.Background())
+	if err != nil {
+		t.Fatalf("Search() 失败: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("应该找到 1 个结果, got %d", len(results))
+	}
+
+	if results[0].MatchLineIndex != -1 {
+		t.Errorf("未启用上下文时 MatchLineIndex 应为 -1, got %d", results[0].MatchLineIndex)
 	}
 }
 

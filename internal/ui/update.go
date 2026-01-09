@@ -47,11 +47,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd := m.handleTabDeactivated(prev); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-			if typed.Index == 1 && prev != 1 {
+			if typed.Index == 1 && prev != 1 { // Tasks is index 1
 				m.lastNonTaskTabIndex = prev
 			}
 			m.activeTabIndex = typed.Index
 			m.tabBar.SetActive(typed.Index)
+			if typed.Index == 2 { // Search is index 2
+				// 切换到搜索Tab时，尝试从项目列表获取当前选中的项目
+				if p := m.projectsTab.SelectedProject(); p != nil {
+					m.searchTab.SetCurrentProject(p)
+				}
+			}
 			if cmd := m.handleTabActivated(typed.Index); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -73,6 +79,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 隐藏Command Palette
 		m.showCmdPalette = false
 		m.cmdPalette.Deactivate()
+
+	case common.OpenProjectLogMsg:
+		// Handle opening log from search results
+		// Switch to Projects Tab (Index 0)
+		if m.activeTabIndex != 0 {
+			// Deactivate previous tab if needed
+			if m.activeTabIndex == 2 { // Search is index 2
+				m.searchTab.OnDeactivated()
+			}
+
+			m.activeTabIndex = 0
+			m.tabBar.SetActive(0)
+
+			// Activate new tab
+			// m.projectsTab.OnActivated() // If needed
+		}
+		// Pass the message to the projects tab
+		var cmd tea.Cmd
+		m.projectsTab, cmd = m.projectsTab.Update(typed)
+		cmds = append(cmds, cmd)
 
 	case common.ErrorMsg:
 		m.err = typed.Err
@@ -111,21 +137,11 @@ func (m *Model) handleGlobalKey(keyMsg tea.KeyMsg, cmds *[]tea.Cmd) bool {
 		}
 		return false
 
-	case key.Matches(keyMsg, m.globalKeys.Task):
-		if !m.canTriggerTaskShortcut() {
-			return false
-		}
-		target := m.taskShortcutTarget()
-		*cmds = append(*cmds, func() tea.Msg {
-			return common.SwitchTabMsg{Index: target}
-		})
-		return true
-
 	case key.Matches(keyMsg, m.globalKeys.Search):
 		if m.showCmdPalette {
 			return false
 		}
-		if m.activeTabIndex == 2 {
+		if m.activeTabIndex == 2 { // Search is index 2
 			if cmd := m.searchTab.FocusInput(); cmd != nil {
 				*cmds = append(*cmds, cmd)
 			}
@@ -141,33 +157,39 @@ func (m *Model) handleGlobalKey(keyMsg tea.KeyMsg, cmds *[]tea.Cmd) bool {
 		if keyMsg.Type == tea.KeyEsc || keyMsg.String() == "esc" {
 			return false
 		}
+
+		// Don't quit if 'q' is pressed while search input is focused
+		if keyMsg.String() == "q" && m.activeTabIndex == 2 && m.searchTab.IsInputFocused() {
+			return false
+		}
+
 		// Ctrl+C/q 退出
 		*cmds = append(*cmds, tea.Quit)
 		return true
 
 	case keyMsg.String() == "1":
-		// 切换到Tab 1（项目）
+		// 切换到Tab 1
 		*cmds = append(*cmds, func() tea.Msg {
 			return common.SwitchTabMsg{Index: 0}
 		})
 		return true
 
 	case keyMsg.String() == "2":
-		// 切换到Tab 2（任务）
+		// 切换到Tab 2
 		*cmds = append(*cmds, func() tea.Msg {
 			return common.SwitchTabMsg{Index: 1}
 		})
 		return true
 
 	case keyMsg.String() == "3":
-		// 切换到Tab 3（搜索）
+		// 切换到Tab 3
 		*cmds = append(*cmds, func() tea.Msg {
 			return common.SwitchTabMsg{Index: 2}
 		})
 		return true
 
 	case keyMsg.String() == "4":
-		// 切换到Tab 4（统计）
+		// 切换到Tab 4
 		*cmds = append(*cmds, func() tea.Msg {
 			return common.SwitchTabMsg{Index: 3}
 		})

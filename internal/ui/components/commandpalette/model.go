@@ -1,11 +1,10 @@
 package commandpalette
 
 import (
-	"strings"
-
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/sahilm/fuzzy"
 
 	"github.com/aliancn/logcmd/internal/ui/common"
 )
@@ -29,14 +28,14 @@ func (c Command) FilterValue() string { return c.Label + " " + c.Desc }
 
 // Model CommandPalette组件的Model
 type Model struct {
-	input     textinput.Model // 输入框
-	list      list.Model      // 命令列表
-	commands  []Command       // 所有命令
-	active    bool            // 是否激活显示
-	width     int             // 组件宽度
-	height    int             // 组件高度
-	theme     common.Theme
-	styles    common.Styles
+	input    textinput.Model // 输入框
+	list     list.Model      // 命令列表
+	commands []Command       // 所有命令
+	active   bool            // 是否激活显示
+	width    int             // 组件宽度
+	height   int             // 组件高度
+	theme    common.Theme
+	styles   common.Styles
 }
 
 // New 创建CommandPalette Model
@@ -140,13 +139,20 @@ func (m *Model) filterCommands(query string) {
 		return
 	}
 
-	// 简单的模糊匹配：命令标签或描述包含查询字符串
-	query = strings.ToLower(query)
-	var filtered []list.Item
+	// 使用 fuzzy 库进行模糊匹配
+	// 准备搜索源
+	var sources []string
 	for _, cmd := range m.commands {
-		if strings.Contains(strings.ToLower(cmd.Label), query) ||
-			strings.Contains(strings.ToLower(cmd.Desc), query) {
-			filtered = append(filtered, cmd)
+		// 组合 Label 和 Desc 作为搜索内容
+		sources = append(sources, cmd.Label+" "+cmd.Desc)
+	}
+
+	matches := fuzzy.Find(query, sources)
+
+	var filtered []list.Item
+	for _, match := range matches {
+		if match.Index < len(m.commands) {
+			filtered = append(filtered, m.commands[match.Index])
 		}
 	}
 	m.list.SetItems(filtered)

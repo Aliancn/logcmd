@@ -2,12 +2,16 @@ package taskmanager
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/tasks"
@@ -20,6 +24,7 @@ import (
 type Model struct {
 	manager          *tasks.Manager
 	list             list.Model
+	viewport         viewport.Model // Log preview
 	panel            *panel.Panel
 	keys             keyMap
 	theme            common.Theme
@@ -30,11 +35,20 @@ type Model struct {
 	refreshInterval  time.Duration
 	active           bool
 	lastRefreshError error
+
+	// State for split view
+	selectedID        int
+	logPreviewContent string
 }
 
 // tasksLoadedMsg 表示任务列表加载完成。
 type tasksLoadedMsg struct {
 	tasks []*model.Task
+}
+
+type logPreviewMsg struct {
+	taskID  int
+	content string
 }
 
 type refreshTickMsg struct{}
@@ -48,12 +62,14 @@ type taskActionMsg struct {
 func New(manager *tasks.Manager, theme common.Theme, styles common.Styles) Model {
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
+	delegate.Styles.SelectedTitle = styles.ListItemSelected
+	delegate.Styles.SelectedDesc = styles.ListItemSelected.Copy().Foreground(theme.TextMuted)
 
 	l := list.New(nil, delegate, 0, 0)
 	// 禁用默认退出键，统一由上层处理 Esc/Quit
 	l.DisableQuitKeybindings()
 	l.Title = "后台任务"
-	l.Styles.Title = styles.Title
+	l.SetShowTitle(false) // Custom header used
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
 	// 使用Panel自定义footer展示快捷键及状态，避免list默认帮助重复
@@ -64,12 +80,15 @@ func New(manager *tasks.Manager, theme common.Theme, styles common.Styles) Model
 		return []key.Binding{keys.Refresh, keys.Stop, keys.Kill}
 	}
 
+	vp := viewport.New(0, 0)
+
 	// 创建Panel布局容器
 	p := panel.NewDefault("", theme, styles)
 
 	return Model{
 		manager:         manager,
 		list:            l,
+		viewport:        vp,
 		panel:           p,
 		keys:            keys,
 		theme:           theme,
@@ -100,10 +119,10 @@ func (m *Model) SetSize(width, height int) {
 	} else {
 		footer = defaultHints
 	}
-	if footer == "" {
-		footer = defaultHints
-	}
 	m.panel.SetFooter(footer)
+
+	// Custom Header
+	m.panel.SetHeader(lipgloss.NewStyle().Foreground(m.theme.Primary).Bold(true).Render("Process Manager"))
 
 	// 设置Panel尺寸，Panel会自动计算内容区域（已扣除footer）
 	m.panel.SetSize(width, height)
@@ -111,7 +130,6 @@ func (m *Model) SetSize(width, height int) {
 	// 获取Panel计算后的精确内容尺寸
 	contentW, contentH := m.panel.GetContentSize()
 
-	// 确保最小尺寸
 	if contentW < 40 {
 		contentW = 40
 	}
@@ -119,8 +137,34 @@ func (m *Model) SetSize(width, height int) {
 		contentH = 5
 	}
 
+	// Split View Calculation
+	// List takes 40% or min 30 chars
+	listW := int(float64(contentW) * 0.4)
+	if listW < 30 {
+		listW = 30
+	}
+	// If screen is too small, fallback to list only (simplified responsiveness)
+	if contentW < 60 {
+		listW = contentW
+	}
+
+	detailW := contentW - listW - 2 // 2 chars for gap/border
+	if detailW < 0 {
+		detailW = 0
+	}
+
 	// 设置list使用精确的内容尺寸
-	m.list.SetSize(contentW, contentH)
+	m.list.SetSize(listW, contentH)
+
+	// Setup Viewport for log preview (bottom part of details)
+	// Header ~ 2 lines, Meta ~ 6 lines, Gap ~ 1
+	// Log Preview Height = contentH - 9
+	vpH := contentH - 10
+	if vpH < 5 {
+		vpH = 5
+	}
+	m.viewport.Width = detailW
+	m.viewport.Height = vpH
 }
 
 // SetActive 控制刷新生命周期。
@@ -168,16 +212,45 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		} else {
 			m.statusMsg = fmt.Sprintf("已刷新 %d 个任务", len(items))
 		}
+
+		// Check if we need to reload preview for current selection
+		if task := m.selectedTask(); task != nil {
+			if task.ID != m.selectedID {
+				m.selectedID = task.ID
+				cmds = append(cmds, m.loadLogPreviewCmd(task))
+			}
+		}
+
 	case taskActionMsg:
 		m.statusMsg = fmt.Sprintf("任务 #%d 已%s", msg.taskID, msg.action)
 		cmds = append(cmds, m.loadTasksCmd())
+
+	case logPreviewMsg:
+		if m.selectedTask() != nil && m.selectedTask().ID == msg.taskID {
+			m.logPreviewContent = msg.content
+			m.viewport.SetContent(msg.content)
+			m.viewport.GotoBottom()
+		}
+
 	case common.ErrorMsg:
 		m.lastRefreshError = msg.Err
 		m.statusMsg = fmt.Sprintf("错误: %v", msg.Err)
 	}
 
 	var cmd tea.Cmd
+
+	// Check for selection change during list update
+	prevSel := m.selectedTask()
 	m.list, cmd = m.list.Update(msg)
+	cmds = append(cmds, cmd)
+	newSel := m.selectedTask()
+
+	if newSel != nil && (prevSel == nil || prevSel.ID != newSel.ID) {
+		m.selectedID = newSel.ID
+		cmds = append(cmds, m.loadLogPreviewCmd(newSel))
+	}
+
+	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
@@ -197,8 +270,87 @@ func (m Model) View() string {
 		m.panel.SetFooter(defaultHints)
 	}
 
-	// 使用Panel渲染list内容
-	return m.panel.Render(m.list.View())
+	listView := m.list.View()
+	detailsView := m.renderDetails()
+
+	content := lipgloss.JoinHorizontal(lipgloss.Top, listView, "  ", detailsView)
+
+	// 使用Panel渲染内容
+	return m.panel.Render(content)
+}
+
+func (m Model) renderDetails() string {
+	task := m.selectedTask()
+	if task == nil {
+		return ""
+	}
+
+	// Ensure details width
+	width := m.width - m.list.Width() - 4 // minus padding/gap
+	if width <= 0 {
+		return "" // Hide if no space
+	}
+
+	// Styles
+	titleStyle := lipgloss.NewStyle().Foreground(m.theme.Primary).Bold(true).Width(width)
+	labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted).Width(12)
+	valueStyle := lipgloss.NewStyle().Foreground(m.theme.Foreground)
+
+	// Header
+	header := titleStyle.Render(fmt.Sprintf("%s #%d", task.Command, task.ID))
+
+	// Meta Info
+	var metaRows []string
+
+	fields := []struct{ k, v string }{
+		{"Status", strings.ToUpper(task.Status)},
+		{"PID", fmt.Sprintf("%v", safeDerefInt(task.PID))},
+		{"WorkDir", task.WorkingDir},
+		{"Started", safeFormatTime(task.StartedAt)},
+		{"LogPath", task.LogFilePath},
+	}
+
+	for _, f := range fields {
+		row := lipgloss.JoinHorizontal(lipgloss.Left,
+			labelStyle.Render(f.k+":"),
+			valueStyle.Render(f.v),
+		)
+		metaRows = append(metaRows, row)
+	}
+
+	metaBlock := strings.Join(metaRows, "\n")
+
+	// Log Preview
+	previewHeader := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(m.theme.Border).
+		Width(width).
+		Render("Recent Logs")
+
+	preview := m.viewport.View()
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"",
+		metaBlock,
+		"",
+		previewHeader,
+		preview,
+	)
+}
+
+func safeDerefInt(i *int64) int64 {
+	if i == nil {
+		return 0
+	}
+	return *i
+}
+
+func safeFormatTime(t *time.Time) string {
+	if t == nil {
+		return "-"
+	}
+	return t.Format("15:04:05")
 }
 
 func (m Model) selectedTask() *model.Task {
@@ -220,6 +372,59 @@ func (m Model) loadTasksCmd() tea.Cmd {
 		}
 		return tasksLoadedMsg{tasks: tasksList}
 	}
+}
+
+func (m Model) loadLogPreviewCmd(task *model.Task) tea.Cmd {
+	if task == nil || task.LogFilePath == "" {
+		return func() tea.Msg { return logPreviewMsg{taskID: 0, content: "No log file"} }
+	}
+
+	taskID := task.ID
+	path := task.LogFilePath
+
+	return func() tea.Msg {
+		// Read last 1KB or ~20 lines
+		content := readTail(path, 2048) // 2KB buffer
+		return logPreviewMsg{
+			taskID:  taskID,
+			content: content,
+		}
+	}
+}
+
+func readTail(path string, size int64) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Sprintf("Error reading log: %v", err)
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+
+	fileSize := stat.Size()
+	if fileSize == 0 {
+		return "(Empty log)"
+	}
+
+	start := fileSize - size
+	if start < 0 {
+		start = 0
+	}
+
+	if _, err := f.Seek(start, 0); err != nil {
+		return ""
+	}
+
+	buf := make([]byte, size)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return ""
+	}
+
+	return string(buf[:n])
 }
 
 func (m Model) stopTaskCmd(task *model.Task, force bool) tea.Cmd {

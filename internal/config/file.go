@@ -9,9 +9,13 @@ import (
 
 // PersistentConfig 定义可持久化的配置项
 type PersistentConfig struct {
-	BufferSize   int    `json:"buffer_size,omitempty"`   // 缓冲区大小
-	AutoCompress *bool  `json:"auto_compress,omitempty"` // 是否自动压缩
-	TimeFormat   string `json:"time_format,omitempty"`   // 时间格式
+	BufferSize        int      `json:"buffer_size,omitempty"`         // 缓冲区大小
+	AutoCompress      *bool    `json:"auto_compress,omitempty"`       // 是否自动压缩
+	TimeFormat        string   `json:"time_format,omitempty"`         // 时间格式
+	Whitelist         []string `json:"whitelist,omitempty"`           // 允许执行的命令白名单
+	FlushInterval     *int     `json:"flush_interval_ms,omitempty"`   // 日志刷新间隔(毫秒)
+	MaxRetentionDays  *int     `json:"max_retention_days,omitempty"`  // 最大保留天数
+	MaxRetentionCount *int     `json:"max_retention_count,omitempty"` // 最大保留数量
 }
 
 // DefaultPersistentConfig 返回默认持久化配置

@@ -8,8 +8,8 @@ import (
 
 // CommandHistory 记录单条命令的执行历史
 type CommandHistory struct {
-	ID        int       `db:"id"`
-	ProjectID int       `db:"project_id"`
+	ID        int `db:"id"`
+	ProjectID int `db:"project_id"`
 
 	// 命令信息
 	Command     string   `db:"command"`

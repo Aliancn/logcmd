@@ -4,6 +4,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/aliancn/logcmd/internal/history"
+	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/ui/common"
 	"github.com/aliancn/logcmd/internal/ui/modules/historylist"
@@ -39,6 +40,8 @@ type Model struct {
 
 	theme  common.Theme
 	styles common.Styles
+
+	pendingJumpLine int
 }
 
 // New 创建Projects Tab Model
@@ -95,4 +98,9 @@ func (m Model) AllowTaskShortcut() bool {
 		return true
 	}
 	return m.projectList.CanUseGlobalShortcuts()
+}
+
+// SelectedProject 获取当前选中的项目
+func (m Model) SelectedProject() *model.Project {
+	return m.projectList.CurrentProject()
 }

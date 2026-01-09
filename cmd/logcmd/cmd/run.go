@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/aliancn/logcmd/internal/config"
@@ -61,6 +62,27 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	repo := persistence.NewRunRepository(reg)
 	statsUpdater := persistence.NewStatsUpdater(reg)
 
+	// 自动清理 (Auto-Cleaning)
+	var cleanWg sync.WaitGroup
+	if cfg.MaxRetentionDays > 0 || cfg.MaxRetentionCount > 0 {
+		cleanWg.Add(1)
+		go func() {
+			defer cleanWg.Done()
+			histMgr := services.HistoryManager()
+			if cfg.MaxRetentionDays > 0 {
+				if err := histMgr.DeleteOldRecords(cfg.MaxRetentionDays); err != nil {
+					// 仅在调试模式下打印错误，避免干扰用户输出
+					// fmt.Fprintf(os.Stderr, "自动清理失败 (Days): %v\n", err)
+				}
+			}
+			if cfg.MaxRetentionCount > 0 {
+				if err := histMgr.DeleteExcessRecords(cfg.MaxRetentionCount); err != nil {
+					// fmt.Fprintf(os.Stderr, "自动清理失败 (Count): %v\n", err)
+				}
+			}
+		}()
+	}
+
 	log, err := logger.New(cfg, repo, statsUpdater)
 	if err != nil {
 		return fmt.Errorf("创建日志记录器失败: %w", err)
@@ -69,12 +91,17 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if _, _, err := log.Run(ctx, args[0], args[1:]...); err != nil {
+	_, _, runErr := log.Run(ctx, args[0], args[1:]...)
+
+	// 等待清理完成
+	cleanWg.Wait()
+
+	if runErr != nil {
 		if ctx.Err() == context.Canceled {
 			fmt.Println("\n命令已由用户中断")
 			return newExitError(nil, 130)
 		}
-		return fmt.Errorf("执行失败: %w", err)
+		return fmt.Errorf("执行失败: %w", runErr)
 	}
 
 	return nil

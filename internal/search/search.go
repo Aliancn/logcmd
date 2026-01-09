@@ -27,10 +27,11 @@ type SearchOptions struct {
 
 // SearchResult 搜索结果
 type SearchResult struct {
-	FilePath string   // 文件路径
-	LineNum  int      // 行号
-	Line     string   // 匹配的行
-	Context  []string // 上下文行
+	FilePath       string   `json:"file_path"`   // 文件路径
+	LineNum        int      `json:"line_num"`    // 行号
+	Line           string   `json:"line"`        // 匹配的行
+	Context        []string `json:"context"`     // 上下文行
+	MatchLineIndex int      `json:"match_index"` // 匹配行在 Context 中的索引，若无上下文则为 -1
 }
 
 // Searcher 日志搜索器
@@ -104,7 +105,9 @@ func (s *Searcher) Search(ctx context.Context, handler ResultHandler) error {
 
 	err = fileWalker.Walk(ctx, func(ctx context.Context, path string, info os.FileInfo) error {
 		if err := s.searchFile(ctx, path, handler); err != nil {
-			fmt.Fprintf(os.Stderr, "搜索文件 %s 失败: %v\n", path, err)
+			// 在TUI模式下，单个文件的读取错误（如权限不足或行太长）不应中断整个搜索，
+			// 也不应直接打印到Stderr导致界面错乱。
+			// 这里选择忽略错误继续处理下一个文件。
 			return nil
 		}
 		return nil
@@ -133,7 +136,7 @@ func (s *Searcher) searchFile(ctx context.Context, filePath string, handler Resu
 
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, 0, 256*1024)
-	scanner.Buffer(buf, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024) // 10MB limit
 
 	lineNum := 0
 	for scanner.Scan() {
@@ -151,9 +154,10 @@ func (s *Searcher) searchFile(ctx context.Context, filePath string, handler Resu
 
 		if s.matches(line) {
 			result := &SearchResult{
-				FilePath: filePath,
-				LineNum:  lineNum,
-				Line:     line,
+				FilePath:       filePath,
+				LineNum:        lineNum,
+				Line:           line,
+				MatchLineIndex: -1,
 			}
 
 			if s.options.ShowContext > 0 {
@@ -161,13 +165,12 @@ func (s *Searcher) searchFile(ctx context.Context, filePath string, handler Resu
 				copy(contextLines, prevLines)
 				contextLines = append(contextLines, line)
 				result.Context = contextLines
+				result.MatchLineIndex = len(prevLines)
 
-				if s.options.ShowContext > 0 {
-					pendings = append(pendings, &pendingContext{
-						result:    result,
-						remaining: s.options.ShowContext,
-					})
-				}
+				pendings = append(pendings, &pendingContext{
+					result:    result,
+					remaining: s.options.ShowContext,
+				})
 			} else {
 				if err := handler(result); err != nil {
 					return err

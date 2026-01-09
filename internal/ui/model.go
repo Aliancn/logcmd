@@ -75,10 +75,10 @@ func NewRootModel(reg *registry.Registry, historyMgr *history.Manager, taskMgr *
 		analyticsTab: analytics.New(historyMgr, theme, styles),
 
 		// 全局状态
-		activeTabIndex:      0, // 默认激活第一个Tab（项目）
+		activeTabIndex:      0, // 默认激活第一个Tab（项目列表）
 		lastNonTaskTabIndex: 0,
 		showCmdPalette:      false,
-		breadcrumbs:         []string{"Home", "项目"},
+		breadcrumbs:         []string{"Home", "Projects"},
 
 		// 依赖注入
 		registry:   reg,
@@ -94,7 +94,7 @@ func NewRootModel(reg *registry.Registry, historyMgr *history.Manager, taskMgr *
 
 // Init 初始化应用
 func (m *Model) Init() tea.Cmd {
-	// 初始化第一个Tab（项目）
+	// 初始化第一个Tab（项目列表）
 	return m.projectsTab.Init()
 }
 
@@ -125,33 +125,33 @@ func (m *Model) canTriggerTaskShortcut() bool {
 	if m.showCmdPalette {
 		return false
 	}
-	if m.activeTabIndex == 0 {
+	if m.activeTabIndex == 0 { // Projects Tab is now index 0
 		return m.projectsTab.AllowTaskShortcut()
 	}
 	return true
 }
 
 func (m *Model) taskShortcutTarget() int {
-	if m.activeTabIndex == 1 {
+	if m.activeTabIndex == 1 { // Tasks Tab is now index 1
 		target := m.lastNonTaskTabIndex
 		if target == 1 || target < 0 || target > 3 {
-			return 0
+			return 0 // Default back to Projects
 		}
 		return target
 	}
 	if m.activeTabIndex >= 0 && m.activeTabIndex < 4 {
 		m.lastNonTaskTabIndex = m.activeTabIndex
 	}
-	return 1
+	return 1 // Go to Tasks
 }
 
 func (m *Model) handleTaskBack(cmds *[]tea.Cmd) bool {
-	if m.activeTabIndex != 1 || m.showCmdPalette {
+	if m.activeTabIndex != 1 || m.showCmdPalette { // Tasks Tab is index 1
 		return false
 	}
 	target := m.taskShortcutTarget()
 	if target == 1 {
-		target = 0
+		target = 0 // Default back to Projects
 	}
 	*cmds = append(*cmds, func() tea.Msg {
 		return common.SwitchTabMsg{Index: target}

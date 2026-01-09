@@ -1,8 +1,8 @@
 package layout
 
 import (
-	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Orientation 布局方向
@@ -16,14 +16,14 @@ const (
 // SplitConfig 分割视图配置
 type SplitConfig struct {
 	// 基础配置
-	Orientation     Orientation // 默认方向
-	Ratio           float64     // 主视图占比 (0.0 - 1.0)
-	SeparatorStyle  lipgloss.Style
-	
+	Orientation    Orientation // 默认方向
+	Ratio          float64     // 主视图占比 (0.0 - 1.0)
+	SeparatorStyle lipgloss.Style
+
 	// 响应式配置
-	MinWindowWidth  int  // 触发水平布局的最小窗口宽度
-	HideSecondary   bool // 空间不足时是否隐藏次要视图
-	MinSecondarySize int // 次要视图最小尺寸 (宽或高)
+	MinWindowWidth   int  // 触发水平布局的最小窗口宽度
+	HideSecondary    bool // 空间不足时是否隐藏次要视图
+	MinSecondarySize int  // 次要视图最小尺寸 (宽或高)
 }
 
 // DefaultSplitConfig 默认配置
@@ -42,10 +42,10 @@ type SplitView struct {
 	primary   Resizable
 	secondary Resizable
 	config    SplitConfig
-	
+
 	width  int
 	height int
-	
+
 	// 当前实际计算出的状态
 	currentOrientation Orientation
 	secondaryVisible   bool
@@ -122,13 +122,13 @@ func (s *SplitView) recalculate() {
 	if s.config.HideSecondary && s.width < s.config.MinWindowWidth {
 		s.secondaryVisible = false
 		s.currentOrientation = Vertical // 此时方向不重要，因为只有一个视图
-		
+
 		// 主视图占满全屏
 		s.primary.SetSize(s.width, s.height)
 		s.secondary.SetSize(0, 0)
 		return
 	}
-	
+
 	s.secondaryVisible = true
 	s.currentOrientation = s.config.Orientation
 
@@ -139,7 +139,7 @@ func (s *SplitView) recalculate() {
 		// 简单的按比例分配
 		pWidth := int(float64(availWidth) * s.config.Ratio)
 		sWidth := availWidth - pWidth
-		
+
 		// 检查次要视图最小尺寸约束
 		if sWidth < s.config.MinSecondarySize {
 			// 如果空间不足，优先保证最小尺寸，还是隐藏？
@@ -147,22 +147,22 @@ func (s *SplitView) recalculate() {
 			sWidth = s.config.MinSecondarySize
 			pWidth = availWidth - sWidth
 		}
-		
+
 		// 传递尺寸给子组件 (高度占满)
 		s.primary.SetSize(pWidth, s.height)
 		s.secondary.SetSize(sWidth, s.height)
-		
+
 	} else {
 		// 垂直布局：上下分割
 		availHeight := s.height
 		pHeight := int(float64(availHeight) * s.config.Ratio)
 		sHeight := availHeight - pHeight
-		
+
 		if sHeight < s.config.MinSecondarySize {
 			sHeight = s.config.MinSecondarySize
 			pHeight = availHeight - sHeight
 		}
-		
+
 		// 传递尺寸给子组件 (宽度占满)
 		s.primary.SetSize(s.width, pHeight)
 		s.secondary.SetSize(s.width, sHeight)

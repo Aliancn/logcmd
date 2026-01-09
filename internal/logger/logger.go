@@ -23,6 +23,10 @@ type Logger struct {
 	logPath      string // 预设的日志路径
 	mu           sync.Mutex
 	lastFlush    time.Time
+
+	// Async Persistence
+	persistCh chan func()
+	wg        sync.WaitGroup
 }
 
 // RunRepository 抽象运行结果的持久化能力
@@ -42,11 +46,24 @@ func New(cfg *config.Config, repo RunRepository, statsUpdater ProjectStatsUpdate
 		cfg = config.DefaultConfig()
 	}
 
-	return &Logger{
+	l := &Logger{
 		config:       cfg,
 		repo:         repo,
 		statsUpdater: statsUpdater,
-	}, nil
+		persistCh:    make(chan func(), 100), // Buffer size 100
+	}
+
+	l.wg.Add(1)
+	go l.processPersistence()
+
+	return l, nil
+}
+
+func (l *Logger) processPersistence() {
+	defer l.wg.Done()
+	for task := range l.persistCh {
+		task()
+	}
 }
 
 // SetLogPath 设置强制使用的日志路径
@@ -56,6 +73,20 @@ func (l *Logger) SetLogPath(path string) {
 
 // Run 执行命令并记录日志
 func (l *Logger) Run(ctx context.Context, command string, args ...string) (*executor.Result, string, error) {
+	// 检查白名单
+	if len(l.config.Whitelist) > 0 {
+		allowed := false
+		for _, allow := range l.config.Whitelist {
+			if allow == command {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, "", fmt.Errorf("命令 '%s' 不在白名单中，拒绝执行", command)
+		}
+	}
+
 	// 设置命令信息（用于生成日志文件名）
 	l.config.Command = command
 	l.config.CommandArgs = args
@@ -118,15 +149,24 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) (*exec
 	// 写入元数据
 	if result != nil {
 		exec.WriteMetadata(result)
-		
-		if project != nil && l.statsUpdater != nil {
-			if err := l.statsUpdater.UpdateProjectStats(project.ID, result.Command, result.Success, result.Duration); err != nil {
-				fmt.Fprintf(os.Stderr, "更新项目统计失败: %v\n", err)
+
+		if project != nil {
+			// Async Update Stats
+			if l.statsUpdater != nil {
+				l.persistCh <- func() {
+					if err := l.statsUpdater.UpdateProjectStats(project.ID, result.Command, result.Success, result.Duration); err != nil {
+						fmt.Fprintf(os.Stderr, "更新项目统计失败: %v\n", err)
+					}
+				}
 			}
-		}
-		if project != nil && l.repo != nil {
-			if err := l.repo.RecordRun(project, result, logPath); err != nil {
-				fmt.Fprintf(os.Stderr, "记录命令历史失败: %v\n", err)
+
+			// Async Record History
+			if l.repo != nil {
+				l.persistCh <- func() {
+					if err := l.repo.RecordRun(project, result, logPath); err != nil {
+						fmt.Fprintf(os.Stderr, "记录命令历史失败: %v\n", err)
+					}
+				}
 			}
 		}
 	}
@@ -146,7 +186,7 @@ func (l *Logger) Run(ctx context.Context, command string, args ...string) (*exec
 func (l *Logger) writeHeader(command string, args []string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	
+
 	header := fmt.Sprintf(`
 ################################################################################
 # LogCmd - 命令执行日志
@@ -167,6 +207,10 @@ func (l *Logger) writeHeader(command string, args []string) {
 
 // Close 关闭日志记录器
 func (l *Logger) Close() error {
+	// 1. Close persistence channel and wait
+	close(l.persistCh)
+	l.wg.Wait()
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -191,7 +235,7 @@ func (s *syncedWriter) Write(p []byte) (int, error) {
 
 	n, err := s.l.writer.Write(p)
 	if err == nil {
-		if time.Since(s.l.lastFlush) > 200*time.Millisecond {
+		if time.Since(s.l.lastFlush) > s.l.config.FlushInterval {
 			s.l.writer.Flush()
 			s.l.lastFlush = time.Now()
 		}

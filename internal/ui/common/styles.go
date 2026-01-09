@@ -89,7 +89,8 @@ func NewStyles(theme Theme) Styles {
 
 		// UI元素样式
 		StatusBar: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#000000")).
+			Foreground(theme.Foreground).
+			Background(theme.StatusBar).
 			Padding(0, 1),
 
 		TabActive: lipgloss.NewStyle().
@@ -116,7 +117,7 @@ func NewStyles(theme Theme) Styles {
 			Foreground(theme.Foreground),
 
 		ListItemSelected: lipgloss.NewStyle().
-			Foreground(theme.Foreground).
+			Foreground(lipgloss.Color("#ffffff")). // 选中项文字始终为白色以获得最佳对比度
 			Background(theme.Primary).
 			Bold(true),
 	}

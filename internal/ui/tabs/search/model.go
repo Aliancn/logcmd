@@ -3,6 +3,7 @@ package search
 import (
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/ui/common"
 	"github.com/aliancn/logcmd/internal/ui/modules/searchview"
@@ -60,4 +61,14 @@ func (m *Model) OnDeactivated() tea.Cmd {
 // FocusInput 重新聚焦搜索输入框
 func (m *Model) FocusInput() tea.Cmd {
 	return m.searchView.FocusInput()
+}
+
+// IsInputFocused returns whether the search input is focused
+func (m Model) IsInputFocused() bool {
+	return m.searchView.IsInputFocused()
+}
+
+// SetCurrentProject 设置搜索的目标项目
+func (m *Model) SetCurrentProject(p *model.Project) {
+	m.searchView.SetCurrentProject(p)
 }

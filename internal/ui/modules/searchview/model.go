@@ -3,6 +3,7 @@ package searchview
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ const (
 	maxSearchResults = 200
 )
 
+// Messages
 type projectsLoadedMsg struct {
 	Projects []*model.Project
 }
@@ -45,6 +47,12 @@ type searchFailedMsg struct {
 	Err     error
 }
 
+type debounceMsg struct {
+	ID    int
+	Value string
+}
+
+// Data Structures
 type searchResultItem struct {
 	project *model.Project
 	result  *search.SearchResult
@@ -59,12 +67,15 @@ type searchSummary struct {
 	ExecutedAt   time.Time
 }
 
+// searchResultItem implements list.Item
 func (i searchResultItem) Title() string {
 	if i.result == nil {
 		return ""
 	}
+	// Use project style if available
+	projectLabel := displayProject(i.project)
 	return fmt.Sprintf("[%s] %s:%d",
-		displayProject(i.project),
+		projectLabel,
 		relativePath(i.result.FilePath, i.project),
 		i.result.LineNum,
 	)
@@ -75,17 +86,27 @@ func (i searchResultItem) Description() string {
 		return ""
 	}
 	if len(i.result.Context) == 0 {
-		return strings.TrimSpace(i.result.Line)
+		return "> " + strings.TrimSpace(i.result.Line)
 	}
-	lines := make([]string, len(i.result.Context))
+	// find the match line index
+	matchIdx := i.result.MatchLineIndex
+	if matchIdx < 0 || matchIdx >= len(i.result.Context) {
+		// Fallback if index is weird, though it shouldn't be
+		matchIdx = len(i.result.Context) - 1
+	}
+
+	var sb strings.Builder
 	for idx, line := range i.result.Context {
 		prefix := "  "
-		if idx == len(i.result.Context)-1 {
+		if idx == matchIdx {
 			prefix = "> "
 		}
-		lines[idx] = prefix + strings.TrimSpace(line)
+		if idx > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(prefix + strings.TrimSpace(line))
 	}
-	return strings.Join(lines, "\n")
+	return sb.String()
 }
 
 func (i searchResultItem) FilterValue() string {
@@ -95,7 +116,72 @@ func (i searchResultItem) FilterValue() string {
 	return fmt.Sprintf("%s %s", i.result.FilePath, i.result.Line)
 }
 
-// Model 管理全局搜索界面。
+// KeyMap
+type keyMap struct {
+	Run         key.Binding
+	Scope       key.Binding
+	Config      key.Binding
+	FocusInput  key.Binding
+	ToggleFocus key.Binding
+	// Config specific
+	ConfigUp    key.Binding
+	ConfigDown  key.Binding
+	ConfigLeft  key.Binding
+	ConfigRight key.Binding
+	ConfigEnter key.Binding
+	ConfigEsc   key.Binding
+}
+
+func newKeyMap() keyMap {
+	return keyMap{
+		Run: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "搜索"),
+		),
+		Scope: key.NewBinding(
+			key.WithKeys("ctrl+a"),
+			key.WithHelp("ctrl+a", "范围"),
+		),
+		Config: key.NewBinding(
+			key.WithKeys("ctrl+s"),
+			key.WithHelp("ctrl+s", "设置"),
+		),
+		FocusInput: key.NewBinding(
+			key.WithKeys("ctrl+f"),
+			key.WithHelp("ctrl+f", "聚焦输入"),
+		),
+		ToggleFocus: key.NewBinding(
+			key.WithKeys("ctrl+/", "ctrl+_", "tab", "shift+tab"),
+			key.WithHelp("tab", "切换焦点"),
+		),
+		ConfigUp: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "上移"),
+		),
+		ConfigDown: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "下移"),
+		),
+		ConfigLeft: key.NewBinding(
+			key.WithKeys("left", "h"),
+			key.WithHelp("←/h", "减少"),
+		),
+		ConfigRight: key.NewBinding(
+			key.WithKeys("right", "l"),
+			key.WithHelp("→/l", "增加"),
+		),
+		ConfigEnter: key.NewBinding(
+			key.WithKeys("enter", "space"),
+			key.WithHelp("enter", "确认/切换"),
+		),
+		ConfigEsc: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "关闭"),
+		),
+	}
+}
+
+// Model
 type Model struct {
 	registry *registry.Registry
 	panel    *panel.Panel
@@ -105,18 +191,25 @@ type Model struct {
 	height   int
 	active   bool
 
+	// Inputs & List
 	keyword       textinput.Model
 	results       list.Model
 	statusSpinner spinner.Model
-	keys          keyMap
-	contextValues []int
 
-	regex         bool
+	// State
+	keys          keyMap
 	caseSensitive bool
+	contextLines  int
 	searchAll     bool
-	manualScope   bool
-	contextIndex  int
+	manualScope   bool // user manually toggled scope
 	inputFocused  bool
+
+	// Debounce
+	debounceID int
+
+	// Config Modal State
+	showConfig  bool
+	configFocus int // 0: Case Sensitive, 1: Context Lines
 
 	currentProject *model.Project
 	status         string
@@ -127,23 +220,30 @@ type Model struct {
 	queryID        int
 }
 
-// New 创建搜索视图。
+// New creates the Search View Model
 func New(reg *registry.Registry, theme common.Theme, styles common.Styles) Model {
 	input := textinput.New()
-	input.Placeholder = "输入关键词后按 Enter 搜索"
-	input.Prompt = "> "
+	input.Placeholder = "输入关键词..."
+	input.Prompt = "🔍 "
+	input.PromptStyle = lipgloss.NewStyle().Foreground(theme.Primary)
+	input.TextStyle = styles.Normal
+	input.PlaceholderStyle = styles.Muted
+	input.Cursor.Style = lipgloss.NewStyle().Foreground(theme.Primary)
 
 	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
+	delegate.Styles.SelectedTitle = styles.ListItemSelected
+	delegate.Styles.SelectedDesc = styles.ListItemSelected.Copy().Foreground(theme.TextMuted)
+
 	results := list.New(nil, delegate, 0, 0)
-	// 搜索结果列表禁用默认退出键，避免 Esc 触发 Quit
 	results.DisableQuitKeybindings()
 	results.Title = "搜索结果"
+	results.SetShowTitle(false)
 	results.SetShowStatusBar(false)
 	results.SetFilteringEnabled(false)
 	results.SetShowPagination(true)
+	results.Styles.PaginationStyle = styles.Muted
 
-	// 创建Panel布局容器
 	p := panel.NewDefault("", theme, styles)
 
 	spin := spinner.New(
@@ -160,76 +260,72 @@ func New(reg *registry.Registry, theme common.Theme, styles common.Styles) Model
 		results:       results,
 		statusSpinner: spin,
 		keys:          newKeyMap(),
-		contextValues: []int{0, 2, 5},
-		status:        "输入关键词后按 Enter 搜索",
+		caseSensitive: false,
+		contextLines:  0,
+		status:        "准备就绪",
+		inputFocused:  true,
+		configFocus:   0,
 	}
 }
 
-// Init 实现 tea.Model。
+// Init
 func (m Model) Init() tea.Cmd {
 	return nil
 }
 
-// SetSize 更新尺寸。
+// SetSize
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 
-	// 构建header（form）
-	header := m.renderForm()
-	m.panel.SetHeader(header)
-
-	// 设置Panel尺寸，Panel会自动计算内容区域（已扣除header）
+	// 1. First set the total size of the panel to calculate the available content width
 	m.panel.SetSize(width, height)
 
-	// 获取Panel计算后的精确内容尺寸
+	// 2. Render header and footer using the calculated content width
+	m.panel.SetHeader(m.renderHeader())
+	m.panel.SetFooter(m.renderFooter())
+
+	// 3. Get the final content size (after header/footer height deduction)
 	contentW, contentH := m.panel.GetContentSize()
 
-	// 确保最小尺寸
-	if contentW < 30 {
-		contentW = 30
+	if contentW < 10 {
+		contentW = 10
 	}
 	if contentH < 5 {
 		contentH = 5
 	}
-
-	// 设置results使用精确的内容尺寸
 	m.results.SetSize(contentW, contentH)
-
-	// 仅提示该视图特有的快捷键
-	m.panel.SetFooter("Ctrl+O 浏览结果 · / 编辑关键词")
 }
 
-// Activate 激活搜索视图。
+// Activate
 func (m *Model) Activate() tea.Cmd {
 	m.active = true
 	m.inputFocused = true
-	m.status = "输入关键词后按 Enter 搜索"
-	m.keyword.SetValue("")
+	m.keyword.Focus()
 	m.keyword.CursorEnd()
-	cmds := []tea.Cmd{m.keyword.Focus()}
+
+	cmds := []tea.Cmd{textinput.Blink}
 	if m.registry != nil {
 		cmds = append(cmds, m.loadProjectsCmd())
 	}
 	return tea.Batch(cmds...)
 }
 
-// Deactivate 退出搜索视图。
+// Deactivate
 func (m *Model) Deactivate() tea.Cmd {
 	m.active = false
 	m.keyword.Blur()
 	m.inputFocused = false
-	m.loading = false
 	return nil
 }
 
-// FocusInput 让搜索输入框重新获得焦点
+// FocusInput
 func (m *Model) FocusInput() tea.Cmd {
 	m.inputFocused = true
 	return m.keyword.Focus()
 }
 
-// SetCurrentProject 设置默认搜索项目。
+// SetCurrentProject
 func (m *Model) SetCurrentProject(project *model.Project) {
 	m.currentProject = project
 	if project == nil {
@@ -242,66 +338,190 @@ func (m *Model) SetCurrentProject(project *model.Project) {
 	}
 }
 
-// Update 处理消息。
+// IsInputFocused returns true if the input is currently focused
+func (m Model) IsInputFocused() bool {
+	return m.inputFocused
+}
+
+// Update
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch typed := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.SetSize(typed.Width, typed.Height)
+	case debounceMsg:
+		if typed.ID == m.debounceID {
+			return m, m.startSearch()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if !m.active {
 			break
 		}
+
+		// Config Overlay Handling
+		if m.showConfig {
+			switch {
+			case key.Matches(typed, m.keys.ConfigEsc):
+				m.showConfig = false
+				return m, nil
+
+			case key.Matches(typed, m.keys.ConfigUp):
+				m.configFocus--
+				if m.configFocus < 0 {
+					m.configFocus = 1 // wrap
+				}
+				return m, nil
+
+			case key.Matches(typed, m.keys.ConfigDown):
+				m.configFocus++
+				if m.configFocus > 1 {
+					m.configFocus = 0 // wrap
+				}
+				return m, nil
+
+			case key.Matches(typed, m.keys.ConfigEnter):
+				if m.configFocus == 0 {
+					m.caseSensitive = !m.caseSensitive
+				}
+				// For context lines, Enter doesn't do much if we use Left/Right, maybe close?
+				return m, nil
+
+			case key.Matches(typed, m.keys.ConfigLeft):
+				if m.configFocus == 1 && m.contextLines > 0 {
+					m.contextLines--
+				}
+				return m, nil
+
+			case key.Matches(typed, m.keys.ConfigRight):
+				if m.configFocus == 1 && m.contextLines < 20 {
+					m.contextLines++
+				}
+				return m, nil
+			}
+			// In config mode, eat all other keys
+			return m, nil
+		}
+
+		// Global Search View shortcuts
+		switch {
+		case key.Matches(typed, m.keys.Config):
+			m.showConfig = true
+			return m, nil
+
+		case key.Matches(typed, m.keys.ToggleFocus):
+			m.inputFocused = !m.inputFocused
+			if m.inputFocused {
+				return m, m.keyword.Focus()
+			} else {
+				m.keyword.Blur()
+				return m, nil
+			}
+
+		case key.Matches(typed, m.keys.FocusInput):
+			if !m.inputFocused {
+				m.inputFocused = true
+				return m, m.keyword.Focus()
+			}
+		
+		case key.Matches(typed, m.keys.Scope):
+			m.toggleScope()
+			return m, nil
+		}
+
 		if m.inputFocused {
-			var cmd tea.Cmd
-			m.keyword, cmd = m.keyword.Update(typed)
-			if cmd != nil {
+			// Input Mode handling
+			switch {
+			case key.Matches(typed, m.keys.Run): // Enter to search
+				cmds = append(cmds, m.startSearch())
+			// NOTE: Removed Down arrow auto-switching
+			default:
+				oldVal := m.keyword.Value()
+				var cmd tea.Cmd
+				m.keyword, cmd = m.keyword.Update(typed)
 				cmds = append(cmds, cmd)
+
+				// Trigger debounce search if value changed
+				newVal := m.keyword.Value()
+				if newVal != oldVal {
+					m.debounceID++
+					id := m.debounceID
+					cmds = append(cmds, tea.Tick(time.Millisecond*400, func(t time.Time) tea.Msg {
+						return debounceMsg{ID: id, Value: newVal}
+					}))
+				}
 			}
-		}
-		if handled, cmd := m.handleKey(typed); handled {
-			if cmd != nil {
-				cmds = append(cmds, cmd)
+
+		} else {
+			// List Mode handling
+			switch {
+			// NOTE: Removed Up arrow auto-switching
+			// NOTE: Removed "/" key switching (now handled by ToggleFocus or FocusInput explicitly via Ctrl)
+			
+			case typed.String() == "enter":
+				// Enter to open result
+				if item, ok := m.results.SelectedItem().(searchResultItem); ok && item.result != nil {
+					return m, func() tea.Msg {
+						return common.OpenProjectLogMsg{
+							Project:  item.project,
+							FilePath: item.result.FilePath,
+							LineNum:  item.result.LineNum,
+						}
+					}
+				}
 			}
-			break
-		}
-		if !m.inputFocused {
+
 			var cmd tea.Cmd
 			m.results, cmd = m.results.Update(typed)
 			cmds = append(cmds, cmd)
 		}
+
+		// Always update header/footer on key event
+		m.panel.SetHeader(m.renderHeader())
+		m.panel.SetFooter(m.renderFooter())
+
 		return m, tea.Batch(cmds...)
+
 	case projectsLoadedMsg:
 		if len(typed.Projects) == 0 && m.currentProject == nil {
 			m.searchAll = true
 		}
+
 	case projectsLoadFailedMsg:
 		m.status = fmt.Sprintf("加载项目失败: %v", typed.Err)
 		m.err = typed.Err
+
 	case searchFinishedMsg:
-		if typed.QueryID != m.queryID {
-			break
+		if typed.QueryID == m.queryID {
+			m.loading = false
+			m.err = nil
+			m.status = typed.Summary
+			stats := typed.Stats
+			m.lastStats = &stats
+			m.lastExecuted = stats.ExecutedAt
+
+			items := make([]list.Item, len(typed.Items))
+			for i, item := range typed.Items {
+				items[i] = item
+			}
+			m.results.SetItems(items)
+			m.results.ResetSelected()
+
+			// Auto focus list if we have results
+			if len(items) > 0 {
+				m.inputFocused = false
+				m.keyword.Blur()
+			}
 		}
-		m.loading = false
-		m.err = nil
-		m.status = typed.Summary
-		stats := typed.Stats
-		m.lastStats = &stats
-		m.lastExecuted = stats.ExecutedAt
-		items := make([]list.Item, len(typed.Items))
-		for i, item := range typed.Items {
-			items[i] = item
-		}
-		m.results.SetItems(items)
+
 	case searchFailedMsg:
-		if typed.QueryID != m.queryID {
-			break
+		if typed.QueryID == m.queryID {
+			m.loading = false
+			m.err = typed.Err
+			m.status = fmt.Sprintf("搜索失败: %v", typed.Err)
+			m.lastExecuted = time.Now()
 		}
-		m.loading = false
-		m.err = typed.Err
-		m.status = fmt.Sprintf("搜索失败: %v", typed.Err)
-		m.lastExecuted = time.Now()
+
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.statusSpinner, cmd = m.statusSpinner.Update(typed)
@@ -311,61 +531,19 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 
-	if _, ok := msg.(tea.KeyMsg); !ok {
-		var cmd tea.Cmd
-		m.results, cmd = m.results.Update(msg)
-		cmds = append(cmds, cmd)
-	}
-
 	return m, tea.Batch(cmds...)
 }
 
-// View 渲染界面。
-func (m Model) View() string {
-	if !m.active {
-		return ""
+func (m *Model) toggleScope() {
+	if m.currentProject != nil {
+		m.manualScope = true
+		m.searchAll = !m.searchAll
+	} else {
+		m.searchAll = true
 	}
-
-	// 使用Panel渲染results内容
-	// header（form）已经在SetSize中设置好了
-	m.panel.SetHeader(m.renderForm())
-	return m.panel.Render(m.results.View())
 }
 
-func (m *Model) handleKey(keyMsg tea.KeyMsg) (bool, tea.Cmd) {
-	switch {
-	case key.Matches(keyMsg, m.keys.Run):
-		if m.inputFocused {
-			return true, m.startSearch()
-		}
-	case key.Matches(keyMsg, m.keys.Regex):
-		m.regex = !m.regex
-		return true, nil
-	case key.Matches(keyMsg, m.keys.Case):
-		m.caseSensitive = !m.caseSensitive
-		return true, nil
-	case key.Matches(keyMsg, m.keys.Scope):
-		if m.currentProject != nil {
-			m.manualScope = true
-			m.searchAll = !m.searchAll
-		} else {
-			m.searchAll = true
-		}
-		return true, nil
-	case key.Matches(keyMsg, m.keys.Context):
-		m.contextIndex = (m.contextIndex + 1) % len(m.contextValues)
-		return true, nil
-	case key.Matches(keyMsg, m.keys.FocusInput):
-		m.inputFocused = true
-		return true, m.keyword.Focus()
-	case key.Matches(keyMsg, m.keys.FocusResult):
-		m.inputFocused = false
-		m.keyword.Blur()
-		return true, nil
-	}
-	return false, nil
-}
-
+// Actions
 func (m *Model) startSearch() tea.Cmd {
 	query := strings.TrimSpace(m.keyword.Value())
 	if query == "" {
@@ -376,12 +554,12 @@ func (m *Model) startSearch() tea.Cmd {
 	m.err = nil
 	m.status = "正在搜索..."
 	m.queryID++
+
 	params := searchParams{
 		QueryID:       m.queryID,
 		Keyword:       query,
-		Regex:         m.regex,
 		CaseSensitive: m.caseSensitive,
-		ContextLines:  m.contextValues[m.contextIndex],
+		ContextLines:  m.contextLines,
 		SearchAll:     m.searchAll || m.currentProject == nil,
 		Project:       m.currentProject,
 	}
@@ -407,7 +585,6 @@ func (m Model) loadProjectsCmd() tea.Cmd {
 type searchParams struct {
 	QueryID       int
 	Keyword       string
-	Regex         bool
 	CaseSensitive bool
 	ContextLines  int
 	SearchAll     bool
@@ -419,12 +596,11 @@ func (m Model) searchCmd(params searchParams) tea.Cmd {
 	return func() tea.Msg {
 		started := time.Now()
 		var targets []*model.Project
+
+		// Determine targets
 		if params.SearchAll {
 			if reg == nil {
-				return searchFailedMsg{
-					QueryID: params.QueryID,
-					Err:     fmt.Errorf("无法加载项目列表"),
-				}
+				return searchFailedMsg{QueryID: params.QueryID, Err: fmt.Errorf("registry not initialized")}
 			}
 			list, err := reg.List()
 			if err != nil {
@@ -434,20 +610,23 @@ func (m Model) searchCmd(params searchParams) tea.Cmd {
 		} else if params.Project != nil {
 			targets = []*model.Project{params.Project}
 		} else {
-			return searchFailedMsg{
-				QueryID: params.QueryID,
-				Err:     fmt.Errorf("没有可搜索的项目"),
-			}
+			return searchFailedMsg{QueryID: params.QueryID, Err: fmt.Errorf("no project selected")}
 		}
 
 		matches := make([]searchResultItem, 0, 32)
 		ctx := context.Background()
 
+		// Execute Search
 		for _, project := range targets {
+			// 检查日志目录是否存在，不存在则跳过该项目
+			if _, err := os.Stat(project.Path); os.IsNotExist(err) {
+				continue
+			}
+
 			opts := &search.SearchOptions{
 				LogDir:        project.Path,
 				Keyword:       params.Keyword,
-				UseRegex:      params.Regex,
+				UseRegex:      false, // Disabled
 				CaseSensitive: params.CaseSensitive,
 				ShowContext:   params.ContextLines,
 			}
@@ -455,6 +634,7 @@ func (m Model) searchCmd(params searchParams) tea.Cmd {
 			if err != nil {
 				return searchFailedMsg{QueryID: params.QueryID, Err: err}
 			}
+
 			err = searcher.Search(ctx, func(result *search.SearchResult) error {
 				if len(matches) >= maxSearchResults {
 					return nil
@@ -465,6 +645,7 @@ func (m Model) searchCmd(params searchParams) tea.Cmd {
 				})
 				return nil
 			})
+
 			if err != nil && err != context.Canceled {
 				return searchFailedMsg{QueryID: params.QueryID, Err: err}
 			}
@@ -473,11 +654,16 @@ func (m Model) searchCmd(params searchParams) tea.Cmd {
 			}
 		}
 
+		// Summary
 		summary := fmt.Sprintf("匹配 %d 条 · 项目 %d 个", len(matches), len(targets))
 		limited := len(matches) >= maxSearchResults
 		if limited {
-			summary = fmt.Sprintf("%s · 仅显示前 %d 条", summary, maxSearchResults)
+			summary = fmt.Sprintf("%s (已截断)", summary)
 		}
+		if len(matches) == 0 {
+			summary = "未找到匹配项"
+		}
+
 		stats := searchSummary{
 			Query:        params.Keyword,
 			MatchCount:   len(matches),
@@ -485,9 +671,6 @@ func (m Model) searchCmd(params searchParams) tea.Cmd {
 			Duration:     time.Since(started),
 			Limited:      limited,
 			ExecutedAt:   time.Now(),
-		}
-		if len(matches) == 0 {
-			summary = "未找到匹配"
 		}
 
 		return searchFinishedMsg{
@@ -499,33 +682,221 @@ func (m Model) searchCmd(params searchParams) tea.Cmd {
 	}
 }
 
-func (m Model) renderForm() string {
-	scope := "全部项目"
-	if !m.searchAll && m.currentProject != nil {
-		scope = fmt.Sprintf("当前项目 (#%d)", m.currentProject.ID)
+// Rendering
+
+func (m Model) renderHeader() string {
+	width, _ := m.panel.GetContentSize()
+	if width <= 0 {
+		width = m.width - 4
 	}
-	contextLabel := fmt.Sprintf("%d 行", m.contextValues[m.contextIndex])
-	chips := []string{
-		m.renderChip("Regex", boolLabel(m.regex)),
-		m.renderChip("Case", boolLabel(m.caseSensitive)),
-		m.renderChip("范围", scope),
-		m.renderChip("上下文", contextLabel),
+	if width <= 0 {
+		return ""
 	}
-	status := m.renderStatusLine()
-	help := "Enter 搜索 · r 正则 · c 大小写 · a 范围 · x 上下文 · / 编辑 · ctrl+o 浏览结果"
-	return strings.Join([]string{
-		m.keyword.View(),
-		strings.Join(chips, " "),
-		status,
-		help,
-	}, "\n")
+
+	// 1. Input Line
+	inputStyle := lipgloss.NewStyle().
+		Padding(0, 1).
+		Border(lipgloss.RoundedBorder())
+
+	if m.inputFocused {
+		inputStyle = inputStyle.BorderForeground(m.theme.BorderActive)
+	} else {
+		inputStyle = inputStyle.BorderForeground(m.theme.Border)
+	}
+
+	inputView := inputStyle.Width(width - 2).Render(m.keyword.View())
+
+	// 2. Info Line (Options + Status)
+
+	// Options
+	var options []string
+	// Only show Scope and active settings.
+	// Since regex/case/context are now in config, we might want to just show the "Active" bits as badges?
+	// Or just show Scope.
+	options = append(options, m.renderOption(m.scopeLabel(), true))
+	
+	// Show indicators if non-default settings are active
+	if m.caseSensitive {
+		options = append(options, m.renderOption("Aa", true))
+	}
+	if m.contextLines > 0 {
+		options = append(options, m.renderOption(fmt.Sprintf("Ctx:%d", m.contextLines), true))
+	}
+
+	leftSide := lipgloss.JoinHorizontal(lipgloss.Center, options...)
+
+	// Status
+	var statusStr string
+	if m.loading {
+		statusStr = fmt.Sprintf("%s %s", m.statusSpinner.View(), m.status)
+	} else {
+		statusStr = m.status
+		if m.lastStats != nil {
+			statusStr += fmt.Sprintf(" [%s]", formatDuration(m.lastStats.Duration))
+		}
+	}
+	rightSide := m.styles.Muted.Render(statusStr)
+
+	availInnerWidth := width - 2
+	leftW := lipgloss.Width(leftSide)
+	rightW := lipgloss.Width(rightSide)
+
+	gap := availInnerWidth - leftW - rightW
+	if gap < 2 {
+		gap = 2
+	}
+
+	var infoLineContent string
+	if leftW+rightW+gap > availInnerWidth {
+		infoLineContent = lipgloss.JoinHorizontal(lipgloss.Top, leftSide, "  ", rightSide)
+	} else {
+		infoLineContent = lipgloss.JoinHorizontal(lipgloss.Center,
+			leftSide,
+			strings.Repeat(" ", gap),
+			rightSide,
+		)
+	}
+
+	infoLine := lipgloss.NewStyle().
+		Padding(0, 1).
+		Width(width).
+		Render(infoLineContent)
+
+	return lipgloss.JoinVertical(lipgloss.Left, inputView, infoLine)
 }
 
+func (m Model) renderOption(label string, active bool) string {
+	style := lipgloss.NewStyle().
+		MarginRight(2).
+		Foreground(m.theme.TextMuted)
+
+	if active {
+		style = style.Foreground(m.theme.Primary).Bold(true)
+	}
+	return style.Render(label)
+}
+
+func (m Model) renderFooter() string {
+	if m.showConfig {
+		return common.JoinKeyHelps(
+			common.FormatKeyHelp(m.keys.ConfigUp),
+			common.FormatKeyHelp(m.keys.ConfigEnter),
+			common.FormatKeyHelp(m.keys.ConfigLeft),
+			common.FormatKeyHelp(m.keys.ConfigEsc),
+		)
+	}
+
+	return common.JoinKeyHelps(
+		common.FormatKeyHelp(m.keys.Run),
+		common.FormatKeyHelp(m.keys.ToggleFocus),
+		common.FormatKeyHelp(m.keys.FocusInput),
+		common.FormatKeyHelp(m.keys.Config),
+		common.FormatKeyHelp(m.keys.Scope),
+	)
+}
+
+func (m Model) View() string {
+	if !m.active {
+		return ""
+	}
+	
+	var content string
+	
+	if m.showConfig {
+		// Render Config Popup
+		content = m.renderConfigPopup()
+	} else {
+		content = m.results.View()
+	}
+
+	return m.panel.Render(content)
+}
+
+func (m Model) renderConfigPopup() string {
+	// Calculate center relative to panel
+	w, h := m.panel.GetContentSize()
+	
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.theme.Primary).
+		Padding(1, 2).
+		Width(40)
+
+	title := lipgloss.NewStyle().
+		Foreground(m.theme.Primary).
+		Bold(true).
+		MarginBottom(1).
+		Render("搜索设置")
+
+	// Option 1: Case Sensitive
+	opt1Title := "大小写敏感"
+	opt1Value := "OFF"
+	if m.caseSensitive {
+		opt1Value = "ON"
+	}
+	opt1 := m.renderConfigItem(opt1Title, opt1Value, m.configFocus == 0)
+
+	// Option 2: Context Lines
+	opt2Title := "上下文行数"
+	opt2Value := fmt.Sprintf("%d", m.contextLines)
+	opt2 := m.renderConfigItem(opt2Title, opt2Value, m.configFocus == 1)
+
+	// Helper hint
+	hint := lipgloss.NewStyle().
+		MarginTop(1).
+		Foreground(m.theme.TextMuted).
+		Render("Esc 关闭 · Space/←/→ 调整")
+
+	form := lipgloss.JoinVertical(lipgloss.Center,
+		title,
+		opt1,
+		opt2,
+		hint,
+	)
+
+	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, boxStyle.Render(form))
+}
+
+func (m Model) renderConfigItem(label, value string, active bool) string {
+	container := lipgloss.NewStyle().
+		Width(34).
+		PaddingLeft(1).
+		PaddingRight(1)
+	
+	labelStyle := lipgloss.NewStyle().Foreground(m.theme.Foreground)
+	valueStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	
+	if active {
+		container = container.Background(m.theme.TabActive) // Highlights row
+		labelStyle = labelStyle.Bold(true).Foreground(m.theme.Primary)
+		valueStyle = valueStyle.Bold(true).Foreground(m.theme.Primary)
+	}
+
+	// Justify
+	l := labelStyle.Render(label)
+	v := valueStyle.Render(value)
+	
+	// spacer
+	dots := 34 - lipgloss.Width(l) - lipgloss.Width(v) - 2 // -2 for padding
+	if dots < 1 { dots = 1 }
+	spacer := strings.Repeat(" ", dots)
+
+	return container.Render(lipgloss.JoinHorizontal(lipgloss.Center, l, spacer, v))
+}
+
+// Helpers
 func boolLabel(v bool) string {
 	if v {
-		return "开"
+		return "ON"
 	}
-	return "关"
+	return "OFF"
+}
+
+func (m Model) scopeLabel() string {
+	if !m.searchAll && m.currentProject != nil {
+		return fmt.Sprintf("项目(#%d)", m.currentProject.ID)
+	}
+	return "全部项目"
 }
 
 func cloneResult(res *search.SearchResult) *search.SearchResult {
@@ -534,10 +905,11 @@ func cloneResult(res *search.SearchResult) *search.SearchResult {
 	}
 	ctx := append([]string(nil), res.Context...)
 	return &search.SearchResult{
-		FilePath: res.FilePath,
-		LineNum:  res.LineNum,
-		Line:     res.Line,
-		Context:  ctx,
+		FilePath:       res.FilePath,
+		LineNum:        res.LineNum,
+		Line:           res.Line,
+		Context:        ctx,
+		MatchLineIndex: res.MatchLineIndex,
 	}
 }
 
@@ -561,102 +933,9 @@ func relativePath(path string, project *model.Project) string {
 	return path
 }
 
-type keyMap struct {
-	Run         key.Binding
-	Regex       key.Binding
-	Case        key.Binding
-	Scope       key.Binding
-	Context     key.Binding
-	FocusInput  key.Binding
-	FocusResult key.Binding
-}
-
-func newKeyMap() keyMap {
-	return keyMap{
-		Run: key.NewBinding(
-			key.WithKeys("enter"),
-			key.WithHelp("enter", "执行搜索"),
-		),
-		Regex: key.NewBinding(
-			key.WithKeys("r"),
-			key.WithHelp("r", "切换正则"),
-		),
-		Case: key.NewBinding(
-			key.WithKeys("c"),
-			key.WithHelp("c", "切换大小写"),
-		),
-		Scope: key.NewBinding(
-			key.WithKeys("a"),
-			key.WithHelp("a", "切换范围"),
-		),
-		Context: key.NewBinding(
-			key.WithKeys("x"),
-			key.WithHelp("x", "切换上下文行数"),
-		),
-		FocusInput: key.NewBinding(
-			key.WithKeys("/"),
-			key.WithHelp("/", "编辑关键词"),
-		),
-		FocusResult: key.NewBinding(
-			key.WithKeys("ctrl+o"),
-			key.WithHelp("ctrl+o", "浏览结果"),
-		),
-	}
-}
-
-func (m Model) renderChip(label, value string) string {
-	chipStyle := lipgloss.NewStyle().
-		Background(m.theme.StatusBar).
-		Foreground(m.theme.Foreground).
-		Padding(0, 1).
-		MarginRight(1)
-	labelStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
-	valueStyle := lipgloss.NewStyle().Bold(true)
-	return chipStyle.Render(fmt.Sprintf("%s %s",
-		labelStyle.Render(label+":"),
-		valueStyle.Render(value),
-	))
-}
-
-func (m Model) renderStatusLine() string {
-	if m.loading {
-		scope := "全部项目"
-		if !m.searchAll && m.currentProject != nil {
-			scope = fmt.Sprintf("项目 #%d", m.currentProject.ID)
-		}
-		return fmt.Sprintf("%s 正在搜索 %s...", m.statusSpinner.View(), scope)
-	}
-	if m.err != nil {
-		status := fmt.Sprintf("搜索失败: %v", m.err)
-		if !m.lastExecuted.IsZero() {
-			status = fmt.Sprintf("%s · %s", status, m.lastExecuted.Format("15:04:05"))
-		}
-		return status
-	}
-	if m.lastStats != nil {
-		stats := m.lastStats
-		parts := []string{
-			fmt.Sprintf("匹配 %d 条", stats.MatchCount),
-			fmt.Sprintf("项目 %d 个", stats.ProjectCount),
-			fmt.Sprintf("耗时 %s", formatDuration(stats.Duration)),
-		}
-		if stats.Limited {
-			parts = append(parts, fmt.Sprintf("仅显示前 %d 条", maxSearchResults))
-		}
-		if !stats.ExecutedAt.IsZero() {
-			parts = append(parts, fmt.Sprintf("上次 %s", stats.ExecutedAt.Format("15:04:05")))
-		}
-		return strings.Join(parts, " · ")
-	}
-	return m.status
-}
-
 func formatDuration(d time.Duration) string {
 	if d >= time.Second {
-		return fmt.Sprintf("%.1fs", d.Seconds())
+		return fmt.Sprintf("%.2fs", d.Seconds())
 	}
-	if d >= time.Millisecond {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	return "即时"
+	return fmt.Sprintf("%dms", d.Milliseconds())
 }

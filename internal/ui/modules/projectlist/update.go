@@ -132,12 +132,12 @@ func (m Model) handleAddProject(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// 更新 inputs
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
-	
-m.pathInput, cmd = m.pathInput.Update(msg)
+
+	m.pathInput, cmd = m.pathInput.Update(msg)
 	cmds = append(cmds, cmd)
 	m.nameInput, cmd = m.nameInput.Update(msg)
 	cmds = append(cmds, cmd)
-	
+
 	return m, tea.Batch(cmds...)
 }
 
@@ -158,12 +158,12 @@ func (m Model) submitAddProject() (Model, tea.Cmd) {
 		if m.registry == nil {
 			return common.ErrorMsg{Err: fmt.Errorf("registry unavailable")}
 		}
-		
+
 		proj, err := m.registry.Register(path)
 		if err != nil {
 			return common.ErrorMsg{Err: fmt.Errorf("添加项目失败: %w", err)}
 		}
-		
+
 		// 如果指定了名称，更新名称
 		if name != "" && name != proj.Name {
 			proj.Name = name

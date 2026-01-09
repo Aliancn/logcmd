@@ -1,6 +1,8 @@
 package logviewer
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -32,6 +34,7 @@ type Model struct {
 	searching   bool
 	lastQuery   string
 	statusMsg   string
+	prettyJson  bool // JSON 格式化模式
 }
 
 // ContentLoadedMsg 表示日志内容已加载。
@@ -192,6 +195,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.searchInput.SetValue("")
 			m.searchInput.Focus()
 			return m, tea.Batch(cmds...)
+		case key.Matches(msg, m.keys.ToggleJSON):
+			m.prettyJson = !m.prettyJson
+			// Re-render content
+			highlighted := m.highlightContent(m.content)
+			m.viewport.SetContent(highlighted)
+			status := "JSON格式化: 关闭"
+			if m.prettyJson {
+				status = "JSON格式化: 开启"
+			}
+			m.statusMsg = status
 		case key.Matches(msg, m.keys.Down):
 			m.viewport.LineDown(1)
 		case key.Matches(msg, m.keys.Up):
@@ -209,8 +222,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if m.history == nil || msg.HistoryID != m.history.ID {
 			break
 		}
-		m.content = msg.Content
-		m.viewport.SetContent(msg.Content)
+		m.content = msg.Content // Keep raw content for search/logic
+
+		// Apply Highlighting
+		highlighted := m.highlightContent(msg.Content)
+
+		m.viewport.SetContent(highlighted)
 		m.viewport.GotoTop()
 		m.statusMsg = fmt.Sprintf("日志加载完成（%d 字节）", len(msg.Content))
 	}
@@ -220,6 +237,106 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
+}
+
+// highlightContent applies syntax highlighting to log content
+func (m Model) highlightContent(content string) string {
+	lines := strings.Split(content, "\n")
+	var sb strings.Builder
+
+	for i, line := range lines {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+
+		// JSON Formatting
+		if m.prettyJson {
+			// Find first '{' and last '}'
+			start := strings.Index(line, "{")
+			end := strings.LastIndex(line, "}")
+
+			if start >= 0 && end > start {
+				jsonPart := line[start : end+1]
+				var buf bytes.Buffer
+				if err := json.Indent(&buf, []byte(jsonPart), "", "  "); err == nil {
+					// Valid JSON, replace part
+					formatted := buf.String()
+					// Indent subsequent lines of JSON to match start pos?
+					// For simplicity, just inject it.
+					// We colorize the JSON part? Maybe later.
+					prefix := line[:start]
+					suffix := line[end+1:]
+
+					// Re-assemble
+					// Note: this makes line multiline. highlight logic below works on line-by-line basis
+					// but we are inside a loop over original lines.
+					// We need to append the formatted block.
+
+					// Style the prefix if needed
+					if len(prefix) > 0 {
+						sb.WriteString(m.styleLine(prefix)) // Recursive style? No, separate helper.
+					}
+
+					// Append formatted JSON (lipgloss doesn't indent multiline automatically well without help)
+					sb.WriteString(formatted)
+
+					if len(suffix) > 0 {
+						sb.WriteString(suffix)
+					}
+					continue // Skip standard processing for this line
+				}
+			}
+		}
+
+		// Standard Highlighting logic (extracted from previous code)
+		sb.WriteString(m.styleLine(line))
+	}
+	return sb.String()
+}
+
+// styleLine applies standard regex/keyword highlighting
+func (m Model) styleLine(line string) string {
+	// Define styles (reused from before, but need to be accessible)
+	// I'll re-instantiate or move them to struct. For now re-instantiate is cheap.
+	timeStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	debugStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
+	infoStyle := lipgloss.NewStyle().Foreground(m.theme.Primary)
+	warnStyle := lipgloss.NewStyle().Foreground(m.theme.Warning)
+	errorStyle := lipgloss.NewStyle().Foreground(m.theme.Error).Bold(true)
+	fatalStyle := lipgloss.NewStyle().Background(m.theme.Error).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+
+	styledLine := line
+	lowerLine := strings.ToLower(line)
+
+	// 1. Highlight Timestamp
+	if len(line) > 20 {
+		firstSpace := strings.Index(line, " ")
+		if firstSpace > 5 && firstSpace < 30 {
+			prefix := line[:firstSpace]
+			if strings.ContainsAny(prefix, "0123456789") {
+				if !strings.Contains(lowerLine, "fatal") && !strings.Contains(lowerLine, "error") && !strings.Contains(lowerLine, "err]") && !strings.Contains(lowerLine, "warn") {
+					styledLine = timeStyle.Render(prefix) + styledLine[firstSpace:]
+				}
+			}
+		}
+	}
+
+	// 2. Highlight Level
+	switch {
+	case strings.Contains(lowerLine, "fatal"):
+		styledLine = fatalStyle.Render(line)
+	case strings.Contains(lowerLine, "error") || strings.Contains(lowerLine, "err]"):
+		styledLine = errorStyle.Render(line)
+	case strings.Contains(lowerLine, "warn"):
+		styledLine = warnStyle.Render(line)
+	case strings.Contains(lowerLine, "info"):
+		styledLine = strings.Replace(styledLine, "INFO", infoStyle.Render("INFO"), 1)
+		styledLine = strings.Replace(styledLine, "info", infoStyle.Render("info"), 1)
+	case strings.Contains(lowerLine, "debug"):
+		styledLine = debugStyle.Render(line)
+	}
+
+	return styledLine
 }
 
 // View 渲染日志。
@@ -256,15 +373,31 @@ func (m *Model) jumpToQuery(query string) {
 	m.statusMsg = "未找到匹配"
 }
 
+// JumpToLine jumps to a specific line number (1-based)
+func (m *Model) JumpToLine(line int) {
+	if line < 1 {
+		line = 1
+	}
+	// Adjust for 0-based index
+	idx := line - 1
+
+	// Ensure we don't go out of bounds (rough check, viewport handles it well usually)
+	// But getting total lines requires splitting content which might be heavy?
+	// Viewport.SetYOffset handles validation mostly.
+	m.viewport.SetYOffset(idx)
+	m.statusMsg = fmt.Sprintf("跳转到行: %d", line)
+}
+
 type keyMap struct {
-	Back     key.Binding
-	Search   key.Binding
-	Down     key.Binding
-	Up       key.Binding
-	PageDown key.Binding
-	PageUp   key.Binding
-	Top      key.Binding
-	Bottom   key.Binding
+	Back       key.Binding
+	Search     key.Binding
+	Down       key.Binding
+	Up         key.Binding
+	PageDown   key.Binding
+	PageUp     key.Binding
+	Top        key.Binding
+	Bottom     key.Binding
+	ToggleJSON key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -276,6 +409,10 @@ func newKeyMap() keyMap {
 		Search: key.NewBinding(
 			key.WithKeys("/"),
 			key.WithHelp("/", "搜索"),
+		),
+		ToggleJSON: key.NewBinding(
+			key.WithKeys("ctrl+j"),
+			key.WithHelp("ctrl+j", "JSON格式化"),
 		),
 		Down: key.NewBinding(
 			key.WithKeys("j", "down"),

@@ -1,8 +1,11 @@
 package projects
 
 import (
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/ui/common"
 	"github.com/aliancn/logcmd/internal/ui/modules/historylist"
 	"github.com/aliancn/logcmd/internal/ui/modules/logviewer"
@@ -21,7 +24,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		// m.splitView.SetSize已经在 m.SetSize 中调用，这里也可以通过 Update 传递
 		// 但由于我们在 Model.Update 中会调用 splitView.Update，所以这里可以省略或者作为备份
 		// 为了一致性，我们在 SetSize 中处理了
-	
+
 	case projectlist.ProjectSelectedMsg:
 		// 从项目列表切换到历史记录视图
 		m.state = HistoryListView
@@ -55,6 +58,34 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		// 从日志查看返回历史记录
 		m.state = HistoryListView
 		// 更新面包屑
+		cmds = append(cmds, func() tea.Msg {
+			return common.UpdateBreadcrumbsMsg{Items: m.GetBreadcrumbs()}
+		})
+
+	case common.OpenProjectLogMsg:
+		// Open log from search result
+		m.state = LogViewerView
+
+		// Create a dummy history object for the view
+		// We cast the project interface back to *model.Project
+		proj, _ := typed.Project.(*model.Project)
+		projectName := "Unknown Project"
+		if proj != nil {
+			projectName = proj.Name
+		}
+
+		dummyHist := &model.CommandHistory{
+			ID:          0, // 0 or negative to indicate ad-hoc
+			Command:     "Search Result [" + projectName + "]",
+			LogFilePath: typed.FilePath,
+			StartTime:   time.Now(),
+		}
+
+		m.pendingJumpLine = typed.LineNum
+		m.logViewer.SetHistory(dummyHist)
+		cmds = append(cmds, m.logViewer.LoadContentCmd())
+
+		// Update breadcrumbs
 		cmds = append(cmds, func() tea.Msg {
 			return common.UpdateBreadcrumbsMsg{Items: m.GetBreadcrumbs()}
 		})
@@ -93,6 +124,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case LogViewerView:
 		m.logViewer, cmd = m.logViewer.Update(msg)
 		cmds = append(cmds, cmd)
+
+		// If content loaded, execute pending jump
+		if _, ok := msg.(logviewer.ContentLoadedMsg); ok && m.pendingJumpLine > 0 {
+			m.logViewer.JumpToLine(m.pendingJumpLine)
+			m.pendingJumpLine = 0
+		}
 	}
 
 	return m, tea.Batch(cmds...)

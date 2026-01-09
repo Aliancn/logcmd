@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -25,6 +26,7 @@ var (
 	searchEnd     string
 	searchAll     bool
 	searchDir     string
+	searchFormat  string
 )
 
 var searchCmd = &cobra.Command{
@@ -58,6 +60,7 @@ func init() {
 	searchCmd.Flags().StringVar(&searchEnd, "end", "", "搜索结束日期 (YYYY-MM-DD)")
 	searchCmd.Flags().BoolVar(&searchAll, "all", false, "搜索所有项目")
 	searchCmd.Flags().StringVar(&searchDir, "dir", "", "日志目录路径")
+	searchCmd.Flags().StringVar(&searchFormat, "format", "", "输出格式 (text, json)")
 }
 
 func runSearch(cmd *cobra.Command) error {
@@ -93,12 +96,25 @@ func runSearch(cmd *cobra.Command) error {
 	}
 
 	var count int
+	isJson := searchFormat == "json"
+	if isJson {
+		fmt.Print("[")
+	}
+
 	err = searcher.Search(ctx, func(result *search.SearchResult) error {
-		if count == 0 {
-			fmt.Println("匹配结果:")
-			fmt.Println()
+		if isJson {
+			if count > 0 {
+				fmt.Print(",")
+			}
+			data, _ := json.Marshal(result)
+			fmt.Print(string(data))
+		} else {
+			if count == 0 {
+				fmt.Println("匹配结果:")
+				fmt.Println()
+			}
+			printSearchResult(result)
 		}
-		printSearchResult(result)
 		count++
 		return nil
 	})
@@ -106,10 +122,14 @@ func runSearch(cmd *cobra.Command) error {
 		return fmt.Errorf("搜索失败: %w", err)
 	}
 
-	if count == 0 {
-		fmt.Println("未找到匹配的日志")
+	if isJson {
+		fmt.Println("]")
 	} else {
-		fmt.Printf("找到 %d 条匹配记录\n", count)
+		if count == 0 {
+			fmt.Println("未找到匹配的日志")
+		} else {
+			fmt.Printf("找到 %d 条匹配记录\n", count)
+		}
 	}
 	return nil
 }
@@ -238,30 +258,59 @@ dispatchLoop:
 		return ctx.Err()
 	}
 
+	isJson := searchFormat == "json"
 	totalResults := 0
+
+	if isJson {
+		fmt.Print("[")
+	}
+
 	for i, entry := range scheduledEntries {
-		fmt.Printf("[%d/%d] 搜索: %s\n", i+1, len(entries), entry.Path)
+		if !isJson {
+			fmt.Printf("[%d/%d] 搜索: %s\n", i+1, len(entries), entry.Path)
+		}
 		result := results[i]
 		if result.err != nil {
-			fmt.Fprintf(os.Stderr, "  警告: 搜索失败: %v\n", result.err)
+			if !isJson {
+				fmt.Fprintf(os.Stderr, "  警告: 搜索失败: %v\n", result.err)
+			}
 			continue
 		}
 
 		if len(result.matches) > 0 {
-			fmt.Printf("  找到 %d 条结果\n", len(result.matches))
-			for _, match := range result.matches {
-				printSearchResult(match)
+			if isJson {
+				for _, match := range result.matches {
+					if totalResults > 0 {
+						fmt.Print(",")
+					}
+					data, _ := json.Marshal(match)
+					fmt.Print(string(data))
+					totalResults++
+				}
+			} else {
+				fmt.Printf("  找到 %d 条结果\n", len(result.matches))
+				for _, match := range result.matches {
+					printSearchResult(match)
+				}
+				totalResults += len(result.matches)
 			}
-			totalResults += len(result.matches)
 		} else {
-			fmt.Println("  未找到结果")
+			if !isJson {
+				fmt.Println("  未找到结果")
+			}
 		}
-		fmt.Println()
+		if !isJson {
+			fmt.Println()
+		}
 
 		reg.UpdateLastChecked(fmt.Sprintf("%d", entry.ID))
 	}
 
-	fmt.Printf("搜索完成，总共找到 %d 条结果\n", totalResults)
+	if isJson {
+		fmt.Println("]")
+	} else {
+		fmt.Printf("搜索完成，总共找到 %d 条结果\n", totalResults)
+	}
 	return nil
 }
 

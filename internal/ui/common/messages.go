@@ -35,3 +35,10 @@ type HideCommandPaletteMsg struct{}
 type ExecuteCommandMsg struct {
 	CommandID string // 命令ID
 }
+
+// OpenProjectLogMsg 打开特定项目的日志文件
+type OpenProjectLogMsg struct {
+	Project  interface{} // 使用interface{}避免循环导入，实际为 *model.Project
+	FilePath string
+	LineNum  int
+}

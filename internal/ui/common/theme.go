@@ -26,7 +26,26 @@ type Theme struct {
 	TextHighlight lipgloss.Color // 高亮文本
 }
 
-// DraculaTheme 返回Dracula配色方案
+// LightTheme 返回明亮色主题（默认）
+func LightTheme() Theme {
+	return Theme{
+		Background:    lipgloss.Color("#ffffff"),
+		Foreground:    lipgloss.Color("#000000"), // 纯黑文本
+		Primary:       lipgloss.Color("#0056b3"), // 深蓝强调色
+		Success:       lipgloss.Color("#28a745"), // 绿色
+		Warning:       lipgloss.Color("#d39e00"), // 深黄色（为了在白底可见）
+		Error:         lipgloss.Color("#dc3545"), // 红色
+		Border:        lipgloss.Color("#dee2e6"), // 浅灰边框
+		BorderActive:  lipgloss.Color("#0056b3"), // 激活边框同主色
+		StatusBar:     lipgloss.Color("#f8f9fa"), // 浅灰背景
+		TabActive:     lipgloss.Color("#e9ecef"), // 激活Tab背景
+		TabInactive:   lipgloss.Color("#dee2e6"), // 非激活Tab背景
+		TextMuted:     lipgloss.Color("#6c757d"), // 灰色文本
+		TextHighlight: lipgloss.Color("#e83e8c"), // 高亮色
+	}
+}
+
+// DraculaTheme 返回Dracula配色方案 (保留备用)
 func DraculaTheme() Theme {
 	return Theme{
 		Background:    lipgloss.Color("#282a36"),
@@ -45,7 +64,7 @@ func DraculaTheme() Theme {
 	}
 }
 
-// DefaultTheme 返回默认主题（当前使用Dracula）
+// DefaultTheme 返回默认主题
 func DefaultTheme() Theme {
-	return DraculaTheme()
+	return LightTheme()
 }

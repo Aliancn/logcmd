@@ -13,6 +13,61 @@ import (
 // ErrTaskStateChanged 代表任务状态已被修改
 var ErrTaskStateChanged = errors.New("task state changed")
 
+const (
+	sqlCreateTask = `
+		INSERT INTO tasks (command, command_args, working_dir, log_dir, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`
+
+	sqlGetTask = `
+		SELECT id, command, command_args, working_dir, log_dir, status,
+		       pid, IFNULL(log_file_path, ''), exit_code, IFNULL(error_message, ''), created_at, updated_at,
+		       started_at, completed_at
+		FROM tasks
+		WHERE id = ?
+	`
+
+	sqlListActiveTasks = `
+		SELECT id, command, command_args, working_dir, log_dir, status,
+		       pid, IFNULL(log_file_path, ''), exit_code, IFNULL(error_message, ''), created_at, updated_at,
+		       started_at, completed_at
+		FROM tasks
+		WHERE status IN (?, ?)
+		ORDER BY created_at ASC
+	`
+
+	sqlUpdateTaskPID         = `UPDATE tasks SET pid = ?, updated_at = ? WHERE id = ?`
+	sqlUpdateTaskLogFilePath = `UPDATE tasks SET log_file_path = ?, updated_at = ? WHERE id = ?`
+
+	sqlMarkTaskRunning = `
+		UPDATE tasks SET status = ?, pid = ?, started_at = ?, updated_at = ?
+		WHERE id = ? AND status IN (?, ?)
+	`
+
+	sqlMarkTaskCompletion = `
+		UPDATE tasks SET
+			status = ?,
+			exit_code = ?,
+			log_file_path = ?,
+			error_message = ?,
+			completed_at = ?,
+			updated_at = ?,
+			pid = NULL
+		WHERE id = ?
+	`
+
+	sqlMarkTaskStopped = `
+		UPDATE tasks SET
+			status = ?,
+			exit_code = -1,
+			error_message = ?,
+			completed_at = ?,
+			updated_at = ?,
+			pid = NULL
+		WHERE id = ? AND status IN (?, ?)
+	`
+)
+
 // Manager 提供后台任务的增删改查能力
 type Manager struct {
 	db *sql.DB
@@ -47,10 +102,7 @@ func (m *Manager) Create(task *model.Task) (*model.Task, error) {
 	task.CreatedAt = now
 	task.UpdatedAt = now
 
-	result, err := m.db.Exec(`
-		INSERT INTO tasks (command, command_args, working_dir, log_dir, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, task.Command, task.ArgsJSON, task.WorkingDir, task.LogDir, task.Status, task.CreatedAt, task.UpdatedAt)
+	result, err := m.db.Exec(sqlCreateTask, task.Command, task.ArgsJSON, task.WorkingDir, task.LogDir, task.Status, task.CreatedAt, task.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("创建任务失败: %w", err)
 	}
@@ -70,13 +122,7 @@ func (m *Manager) Get(id int) (*model.Task, error) {
 		return nil, fmt.Errorf("任务管理器未初始化")
 	}
 
-	row := m.db.QueryRow(`
-		SELECT id, command, command_args, working_dir, log_dir, status,
-		       pid, IFNULL(log_file_path, ''), exit_code, IFNULL(error_message, ''), created_at, updated_at,
-		       started_at, completed_at
-		FROM tasks
-		WHERE id = ?
-	`, id)
+	row := m.db.QueryRow(sqlGetTask, id)
 
 	task, err := scanTask(row)
 	if err != nil {
@@ -95,14 +141,7 @@ func (m *Manager) ListActive() ([]*model.Task, error) {
 		return nil, fmt.Errorf("任务管理器未初始化")
 	}
 
-	rows, err := m.db.Query(`
-		SELECT id, command, command_args, working_dir, log_dir, status,
-		       pid, IFNULL(log_file_path, ''), exit_code, IFNULL(error_message, ''), created_at, updated_at,
-		       started_at, completed_at
-		FROM tasks
-		WHERE status IN (?, ?)
-		ORDER BY created_at ASC
-	`, model.TaskStatusPending, model.TaskStatusRunning)
+	rows, err := m.db.Query(sqlListActiveTasks, model.TaskStatusPending, model.TaskStatusRunning)
 	if err != nil {
 		return nil, fmt.Errorf("查询任务失败: %w", err)
 	}
@@ -186,7 +225,7 @@ func (m *Manager) UpdatePID(id int, pid int) error {
 		return fmt.Errorf("任务管理器未初始化")
 	}
 	now := time.Now()
-	_, err := m.db.Exec(`UPDATE tasks SET pid = ?, updated_at = ? WHERE id = ?`, pid, now, id)
+	_, err := m.db.Exec(sqlUpdateTaskPID, pid, now, id)
 	return err
 }
 
@@ -196,7 +235,7 @@ func (m *Manager) UpdateLogFilePath(id int, path string) error {
 		return fmt.Errorf("任务管理器未初始化")
 	}
 	now := time.Now()
-	_, err := m.db.Exec(`UPDATE tasks SET log_file_path = ?, updated_at = ? WHERE id = ?`, path, now, id)
+	_, err := m.db.Exec(sqlUpdateTaskLogFilePath, path, now, id)
 	return err
 }
 
@@ -206,10 +245,7 @@ func (m *Manager) MarkRunning(id int, pid int) error {
 		return fmt.Errorf("任务管理器未初始化")
 	}
 	now := time.Now()
-	result, err := m.db.Exec(`
-		UPDATE tasks SET status = ?, pid = ?, started_at = ?, updated_at = ?
-		WHERE id = ? AND status IN (?, ?)
-	`, model.TaskStatusRunning, pid, now, now, id, model.TaskStatusPending, model.TaskStatusRunning)
+	result, err := m.db.Exec(sqlMarkTaskRunning, model.TaskStatusRunning, pid, now, now, id, model.TaskStatusPending, model.TaskStatusRunning)
 	if err != nil {
 		return fmt.Errorf("更新任务状态失败: %w", err)
 	}
@@ -231,17 +267,7 @@ func (m *Manager) MarkCompletion(id int, status string, exitCode int, logFilePat
 		status = model.TaskStatusSuccess
 	}
 
-	_, err := m.db.Exec(`
-		UPDATE tasks SET
-			status = ?,
-			exit_code = ?,
-			log_file_path = ?,
-			error_message = ?,
-			completed_at = ?,
-			updated_at = ?,
-			pid = NULL
-		WHERE id = ?
-	`, status, exitCode, logFilePath, errMsg, now, now, id)
+	_, err := m.db.Exec(sqlMarkTaskCompletion, status, exitCode, logFilePath, errMsg, now, now, id)
 	if err != nil {
 		return fmt.Errorf("记录任务结果失败: %w", err)
 	}
@@ -258,16 +284,7 @@ func (m *Manager) MarkStopped(id int, status string, errMsg string) error {
 		status = model.TaskStatusStopped
 	}
 	now := time.Now()
-	result, err := m.db.Exec(`
-		UPDATE tasks SET
-			status = ?,
-			exit_code = -1,
-			error_message = ?,
-			completed_at = ?,
-			updated_at = ?,
-			pid = NULL
-		WHERE id = ? AND status IN (?, ?)
-	`, status, errMsg, now, now, id, model.TaskStatusPending, model.TaskStatusRunning)
+	result, err := m.db.Exec(sqlMarkTaskStopped, status, errMsg, now, now, id, model.TaskStatusPending, model.TaskStatusRunning)
 	if err != nil {
 		return fmt.Errorf("更新任务状态失败: %w", err)
 	}

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,13 +14,17 @@ import (
 
 // Config 定义日志配置
 type Config struct {
-	LogDir       string         // 日志根目录
-	TimeZone     *time.Location // 时区（默认本地时区）
-	BufferSize   int            // 缓冲区大小
-	AutoCompress bool           // 是否自动压缩
-	TimeFormat   string         // 时间格式
-	Command      string         // 当前执行的命令
-	CommandArgs  []string       // 命令参数
+	LogDir            string         // 日志根目录
+	TimeZone          *time.Location // 时区（默认本地时区）
+	BufferSize        int            // 缓冲区大小
+	AutoCompress      bool           // 是否自动压缩
+	TimeFormat        string         // 时间格式
+	Command           string         // 当前执行的命令
+	CommandArgs       []string       // 命令参数
+	Whitelist         []string       // 命令白名单
+	FlushInterval     time.Duration  // 日志刷新间隔
+	MaxRetentionDays  int            // 最大保留天数
+	MaxRetentionCount int            // 最大保留数量
 }
 
 // Load 加载配置
@@ -60,6 +65,21 @@ func mergeConfig(dst *Config, src *PersistentConfig) {
 	if src.TimeFormat != "" {
 		dst.TimeFormat = src.TimeFormat
 	}
+
+	if len(src.Whitelist) > 0 {
+		dst.Whitelist = src.Whitelist
+	}
+
+	if src.FlushInterval != nil && *src.FlushInterval > 0 {
+		dst.FlushInterval = time.Duration(*src.FlushInterval) * time.Millisecond
+	}
+
+	if src.MaxRetentionDays != nil {
+		dst.MaxRetentionDays = *src.MaxRetentionDays
+	}
+	if src.MaxRetentionCount != nil {
+		dst.MaxRetentionCount = *src.MaxRetentionCount
+	}
 }
 
 // DefaultConfig 返回默认配置
@@ -71,11 +91,12 @@ func DefaultConfig() *Config {
 	logDir := findLogDir()
 
 	return &Config{
-		LogDir:       logDir,
-		TimeZone:     tz,
-		BufferSize:   8192,
-		AutoCompress: false,
-		TimeFormat:   "20060102_150405",
+		LogDir:        logDir,
+		TimeZone:      tz,
+		BufferSize:    8192,
+		AutoCompress:  false,
+		TimeFormat:    "20060102_150405",
+		FlushInterval: 200 * time.Millisecond,
 	}
 }
 
@@ -180,6 +201,7 @@ func ensureUniqueLogPath(dir, filename string) (string, error) {
 	ext := filepath.Ext(filename)
 	base := strings.TrimSuffix(filename, ext)
 
+	// 1. 尝试原始文件名
 	candidate := filepath.Join(dir, filename)
 	if _, err := os.Stat(candidate); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -188,14 +210,20 @@ func ensureUniqueLogPath(dir, filename string) (string, error) {
 		return "", fmt.Errorf("检查日志文件失败: %w", err)
 	}
 
-	for i := 1; i < 10000; i++ {
-		newName := fmt.Sprintf("%s_%d%s", base, i, ext)
+	// 2. 冲突时，使用时间戳+随机数生成后缀
+	// 避免线性轮询（原逻辑 i=1..10000 可能导致大量 IO）
+	for i := 0; i < 10; i++ {
+		// 格式: base_UnixNano_Random.log
+		// 使用纳秒级时间戳几乎保证唯一，加上随机数双重保险
+		suffix := fmt.Sprintf("%d_%d", time.Now().UnixNano(), rand.Intn(1000))
+		newName := fmt.Sprintf("%s_%s%s", base, suffix, ext)
+
 		candidate = filepath.Join(dir, newName)
 		if _, err := os.Stat(candidate); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return candidate, nil
 			}
-			return "", fmt.Errorf("检查日志文件失败: %w", err)
+			// 其他错误继续尝试
 		}
 	}
 

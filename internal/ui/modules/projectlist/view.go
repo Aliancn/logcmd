@@ -13,7 +13,7 @@ func (m Model) View() string {
 	if m.isAdding {
 		return m.panel.Render(m.renderAddForm())
 	}
-	
+
 	if len(m.projects) == 0 {
 		return m.panel.RenderEmpty("暂无项目\n按 'a' 添加项目")
 	}
@@ -23,21 +23,21 @@ func (m Model) View() string {
 // renderAddForm 渲染添加项目表单
 func (m Model) renderAddForm() string {
 	var b strings.Builder
-	
+
 	b.WriteString("添加新项目\n\n")
-	
+
 	// 路径输入
 	b.WriteString("项目路径 (绝对路径):\n")
 	b.WriteString(m.pathInput.View())
 	b.WriteString("\n\n")
-	
+
 	// 名称输入
 	b.WriteString("项目名称 (可选):\n")
 	b.WriteString(m.nameInput.View())
 	b.WriteString("\n\n")
-	
+
 	b.WriteString("Enter 确认 · Esc 取消")
-	
+
 	return b.String()
 }
 
@@ -48,7 +48,7 @@ type projectItem struct {
 
 func (i projectItem) Title() string {
 	p := i.project
-	
+
 	category := ""
 	if p.Category != "" {
 		category = fmt.Sprintf(" (%s)", p.Category)
@@ -76,7 +76,7 @@ func (i projectItem) Description() string {
 
 	// 3. 统计
 	parts = append(parts, fmt.Sprintf("Run: %d (%.0f%%)", p.TotalCommands, p.GetSuccessRate()))
-	
+
 	// 4. Tags
 	if len(p.Tags) > 0 {
 		tags := strings.Join(p.Tags, ",")

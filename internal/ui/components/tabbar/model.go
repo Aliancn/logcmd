@@ -8,16 +8,16 @@ import (
 
 // Tab 单个Tab的定义
 type Tab struct {
-	Index int    // Tab索引（0-3）
+	Index int    // Tab索引（0-3，共4个Tab）
 	Key   string // 快捷键（"1", "2", "3", "4"）
 	Label string // 显示标签
 }
 
 // Model TabBar组件的Model
 type Model struct {
-	tabs        []Tab        // Tab列表
-	activeIndex int          // 当前激活的Tab索引
-	width       int          // 组件宽度
+	tabs        []Tab // Tab列表
+	activeIndex int   // 当前激活的Tab索引
+	width       int   // 组件宽度
 	theme       common.Theme
 	styles      common.Styles
 }

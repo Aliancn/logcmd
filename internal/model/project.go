@@ -8,13 +8,13 @@ import (
 
 // Project 表示一个项目的完整信息
 type Project struct {
-	ID          int       `db:"id"`
-	Path        string    `db:"path"`
-	Name        string    `db:"name"`
-	Description string    `db:"description"`
-	Category    string    `db:"category"`
-	Tags        []string  `db:"-"` // 从 JSON 解析
-	TagsJSON    string    `db:"tags"`
+	ID          int      `db:"id"`
+	Path        string   `db:"path"`
+	Name        string   `db:"name"`
+	Description string   `db:"description"`
+	Category    string   `db:"category"`
+	Tags        []string `db:"-"` // 从 JSON 解析
+	TagsJSON    string   `db:"tags"`
 
 	// 统计信息
 	TotalCommands   int   `db:"total_commands"`
@@ -23,9 +23,9 @@ type Project struct {
 	TotalDurationMs int64 `db:"total_duration_ms"`
 
 	// 最后执行信息
-	LastCommand       string         `db:"last_command"`
-	LastCommandStatus string         `db:"last_command_status"`
-	LastCommandTime   sql.NullTime   `db:"last_command_time"`
+	LastCommand       string       `db:"last_command"`
+	LastCommandStatus string       `db:"last_command_status"`
+	LastCommandTime   sql.NullTime `db:"last_command_time"`
 
 	// 时间戳
 	CreatedAt   time.Time `db:"created_at"`

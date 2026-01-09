@@ -147,7 +147,7 @@ func (t *LogNameTemplate) GenerateLogName(command string, args []string, project
 
 // sanitizeFilename 清理文件名，移除不安全字符
 func sanitizeFilename(name string) string {
-	// 替换不安全字符为下划线
+	// 1. 替换不安全字符为下划线
 	replacer := strings.NewReplacer(
 		"/", "_",
 		"\\", "_",
@@ -159,8 +159,35 @@ func sanitizeFilename(name string) string {
 		">", "_",
 		"|", "_",
 		" ", "_",
+		"\x00", "", // Null byte
 	)
-	return replacer.Replace(name)
+	clean := replacer.Replace(name)
+
+	// 2. 移除头部和尾部的点和空格 (Windows 不喜欢)
+	clean = strings.Trim(clean, ". ")
+
+	// 3. 检查 Windows 保留字
+	upper := strings.ToUpper(clean)
+	reserved := map[string]bool{
+		"CON": true, "PRN": true, "AUX": true, "NUL": true,
+		"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true, "COM6": true, "COM7": true, "COM8": true, "COM9": true,
+		"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+	}
+	// 如果是保留字，添加下划线后缀
+	if reserved[upper] {
+		clean = clean + "_"
+	}
+
+	// 4. 限制长度 (255 max, safe limit 200)
+	if len(clean) > 200 {
+		clean = clean[:200]
+	}
+
+	if clean == "" {
+		return "unknown"
+	}
+
+	return clean
 }
 
 // GetProjectName 从.logcmd目录获取项目名称

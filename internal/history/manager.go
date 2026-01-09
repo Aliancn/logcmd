@@ -3,10 +3,56 @@ package history
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/aliancn/logcmd/internal/model"
+)
+
+const (
+	sqlRecordHistory = `
+		INSERT INTO command_history (
+			project_id, command, command_name, command_args,
+			start_time, end_time, duration_ms, exit_code, status,
+			log_file_path, log_date,
+			stdout_preview, stderr_preview, has_error,
+			working_directory, environment_info,
+			created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	sqlSelectHistoryBase = `
+		SELECT id, project_id, command, command_name, command_args,
+			   start_time, end_time, duration_ms, exit_code, status,
+			   log_file_path, log_date,
+			   stdout_preview, stderr_preview, has_error,
+			   working_directory, environment_info,
+			   created_at
+		FROM command_history
+	`
+
+	sqlDeleteHistory          = "DELETE FROM command_history WHERE id = ?"
+	sqlDeleteHistoryByProject = "DELETE FROM command_history WHERE project_id = ?"
+	sqlDeleteOldHistory       = "DELETE FROM command_history WHERE start_time < ?"
+	sqlCountHistory           = "SELECT COUNT(*) FROM command_history"
+
+	// Cleanup Queries
+	sqlSelectOldLogPaths = "SELECT log_file_path FROM command_history WHERE start_time < ?"
+
+	sqlSelectExcessLogPaths = `
+		SELECT id, log_file_path FROM command_history 
+		WHERE id NOT IN (
+			SELECT id FROM command_history ORDER BY start_time DESC LIMIT ?
+		)
+	`
+
+	sqlDeleteExcessHistory = `
+		DELETE FROM command_history 
+		WHERE id NOT IN (
+			SELECT id FROM command_history ORDER BY start_time DESC LIMIT ?
+		)
+	`
 )
 
 // Manager 命令历史管理器
@@ -25,18 +71,7 @@ func (m *Manager) Record(cmd *model.CommandHistory) error {
 		return fmt.Errorf("准备保存数据失败: %w", err)
 	}
 
-	query := `
-		INSERT INTO command_history (
-			project_id, command, command_name, command_args,
-			start_time, end_time, duration_ms, exit_code, status,
-			log_file_path, log_date,
-			stdout_preview, stderr_preview, has_error,
-			working_directory, environment_info,
-			created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	_, err := m.db.Exec(query,
+	_, err := m.db.Exec(sqlRecordHistory,
 		cmd.ProjectID,
 		cmd.Command,
 		cmd.CommandName,
@@ -107,15 +142,7 @@ func (m *Manager) Query(opts QueryOptions) ([]*model.CommandHistory, error) {
 	}
 
 	// 构建SQL查询
-	query := `
-		SELECT id, project_id, command, command_name, command_args,
-			   start_time, end_time, duration_ms, exit_code, status,
-			   log_file_path, log_date,
-			   stdout_preview, stderr_preview, has_error,
-			   working_directory, environment_info,
-			   created_at
-		FROM command_history
-	`
+	query := sqlSelectHistoryBase
 
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
@@ -181,16 +208,7 @@ func (m *Manager) Query(opts QueryOptions) ([]*model.CommandHistory, error) {
 
 // GetByID 根据ID获取命令历史
 func (m *Manager) GetByID(id int) (*model.CommandHistory, error) {
-	query := `
-		SELECT id, project_id, command, command_name, command_args,
-			   start_time, end_time, duration_ms, exit_code, status,
-			   log_file_path, log_date,
-			   stdout_preview, stderr_preview, has_error,
-			   working_directory, environment_info,
-			   created_at
-		FROM command_history
-		WHERE id = ?
-	`
+	query := sqlSelectHistoryBase + " WHERE id = ?"
 
 	var cmd model.CommandHistory
 	err := m.db.QueryRow(query, id).Scan(
@@ -299,7 +317,7 @@ func (m *Manager) GetCommandStats(projectID int, startDate, endDate time.Time) (
 
 // Delete 删除命令历史
 func (m *Manager) Delete(id int) error {
-	result, err := m.db.Exec("DELETE FROM command_history WHERE id = ?", id)
+	result, err := m.db.Exec(sqlDeleteHistory, id)
 	if err != nil {
 		return fmt.Errorf("删除失败: %w", err)
 	}
@@ -318,33 +336,102 @@ func (m *Manager) Delete(id int) error {
 
 // DeleteByProject 删除项目的所有命令历史
 func (m *Manager) DeleteByProject(projectID int) error {
-	_, err := m.db.Exec("DELETE FROM command_history WHERE project_id = ?", projectID)
+	_, err := m.db.Exec(sqlDeleteHistoryByProject, projectID)
 	if err != nil {
 		return fmt.Errorf("删除项目命令历史失败: %w", err)
 	}
 	return nil
 }
 
-// DeleteOldRecords 删除指定天数之前的记录
+// DeleteOldRecords 删除指定天数之前的记录并清理文件
 func (m *Manager) DeleteOldRecords(days int) error {
 	cutoffDate := time.Now().AddDate(0, 0, -days)
-	result, err := m.db.Exec("DELETE FROM command_history WHERE start_time < ?", cutoffDate)
+
+	// 1. 获取要删除的日志文件路径
+	rows, err := m.db.Query(sqlSelectOldLogPaths, cutoffDate)
+	if err != nil {
+		return fmt.Errorf("查询旧记录失败: %w", err)
+	}
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err == nil && path != "" {
+			paths = append(paths, path)
+		}
+	}
+	rows.Close()
+
+	// 2. 删除物理文件
+	deletedFiles := 0
+	for _, path := range paths {
+		if err := os.Remove(path); err == nil {
+			deletedFiles++
+		}
+	}
+
+	// 3. 删除数据库记录
+	result, err := m.db.Exec(sqlDeleteOldHistory, cutoffDate)
 	if err != nil {
 		return fmt.Errorf("删除旧记录失败: %w", err)
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("获取删除结果失败: %w", err)
+	rowsAffected, _ := result.RowsAffected()
+	fmt.Printf("已清理 %d 条过期记录，删除 %d 个日志文件\n", rowsAffected, deletedFiles)
+
+	return nil
+}
+
+// DeleteExcessRecords 保留最近的 N 条记录，删除多余的
+func (m *Manager) DeleteExcessRecords(limit int) error {
+	if limit <= 0 {
+		return nil
 	}
 
-	fmt.Printf("已删除 %d 条旧记录（%d天前）\n", rowsAffected, days)
+	// 1. 获取要删除的日志文件路径
+	rows, err := m.db.Query(sqlSelectExcessLogPaths, limit)
+	if err != nil {
+		return fmt.Errorf("查询多余记录失败: %w", err)
+	}
+
+	var paths []string
+	for rows.Next() {
+		var id int
+		var path string
+		if err := rows.Scan(&id, &path); err == nil && path != "" {
+			paths = append(paths, path)
+		}
+	}
+	rows.Close()
+
+	if len(paths) == 0 {
+		fmt.Println("没有需要清理的记录")
+		return nil
+	}
+
+	// 2. 删除物理文件
+	deletedFiles := 0
+	for _, path := range paths {
+		if err := os.Remove(path); err == nil {
+			deletedFiles++
+		}
+	}
+
+	// 3. 删除数据库记录
+	result, err := m.db.Exec(sqlDeleteExcessHistory, limit)
+	if err != nil {
+		return fmt.Errorf("删除多余记录失败: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	fmt.Printf("已清理 %d 条多余记录，删除 %d 个日志文件\n", rowsAffected, deletedFiles)
+
 	return nil
 }
 
 // Count 统计命令历史总数
 func (m *Manager) Count(projectID int) (int, error) {
-	query := "SELECT COUNT(*) FROM command_history"
+	query := sqlCountHistory
 	args := []interface{}{}
 
 	if projectID > 0 {

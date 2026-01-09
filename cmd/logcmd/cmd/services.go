@@ -3,14 +3,16 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/aliancn/logcmd/internal/history"
 	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/tasks"
 )
 
 // cliServices 提供 CLI 命令使用的共享依赖
 type cliServices struct {
-	registry    *registry.Registry
-	taskManager *tasks.Manager
+	registry       *registry.Registry
+	taskManager    *tasks.Manager
+	historyManager *history.Manager
 }
 
 // newCLIServices 初始化基础依赖
@@ -42,6 +44,17 @@ func (s *cliServices) TaskManager() (*tasks.Manager, error) {
 	}
 	s.taskManager = manager
 	return s.taskManager, nil
+}
+
+func (s *cliServices) HistoryManager() *history.Manager {
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	if s.historyManager != nil {
+		return s.historyManager
+	}
+	s.historyManager = history.NewManager(s.registry.GetDB())
+	return s.historyManager
 }
 
 func (s *cliServices) Close() {

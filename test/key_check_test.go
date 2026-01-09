@@ -21,14 +21,14 @@ func TestKeyMatching(t *testing.T) {
 	} else {
 		fmt.Println("Esc did not match Quit (ctrl+c). Correct.")
 	}
-    
-    // Check if adding 'q' makes it match
-    quitWithQ := key.NewBinding(
-        key.WithKeys("ctrl+c", "q"),
-    )
-    if key.Matches(escMsg, quitWithQ) {
-        fmt.Println("Esc matched Quit (ctrl+c, q)? No.")
-    } else {
-        fmt.Println("Esc did not match Quit (ctrl+c, q). Correct.")
-    }
+
+	// Check if adding 'q' makes it match
+	quitWithQ := key.NewBinding(
+		key.WithKeys("ctrl+c", "q"),
+	)
+	if key.Matches(escMsg, quitWithQ) {
+		fmt.Println("Esc matched Quit (ctrl+c, q)? No.")
+	} else {
+		fmt.Println("Esc did not match Quit (ctrl+c, q). Correct.")
+	}
 }

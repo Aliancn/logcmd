@@ -32,6 +32,12 @@ func New() (*Registry, error) {
 		return nil, fmt.Errorf("打开数据库失败: %w", err)
 	}
 
+	// 启用 WAL 模式以提升并发性能
+	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("启用 WAL 模式失败: %w", err)
+	}
+
 	r := &Registry{db: db}
 
 	// 执行数据库迁移

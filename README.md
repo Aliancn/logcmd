@@ -28,11 +28,14 @@
   - 懒更新检查机制
 - **高性能日志记录**: 使用流式处理和缓冲 I/O，支持大输出量命令
 - **实时输出**: 命令输出实时显示在终端，同时保存到日志文件
-- **交互式 TUI**: 现代化的终端用户界面
-  - **仪表盘**: 实时概览系统负载、任务状态和报警信息
-  - **任务管理**: 分屏显示进程列表与详细信息，支持实时日志预览
-  - **命令面板**: 全局模糊搜索命令，快速直达功能
-  - **日志浏览器**: 语法高亮、快速过滤、时间轴视图
+- **交互式 TUI**: 极简模式系统，类似 vim 的设计理念
+  - **SearchMode（默认）**: 实时模糊搜索，支持全项目/单项目范围切换
+  - **ProjectMode**: 项目管理，选择项目即可快速切换到项目日志
+  - **TaskMode**: 后台任务管理，实时日志预览
+  - **StatsMode**: 统计分析，支持全局和项目级统计
+  - **CommandMode**: vim 风格命令输入（`:search`, `:quit` 等）
+  - **LogViewMode**: 完整日志查看，关键词高亮，自动定位匹配行
+  - **快捷键**: `/` 搜索, `Ctrl+P` 项目, `Ctrl+T` 任务, `Ctrl+S` 统计, `Ctrl+L` 命令, `Ctrl+C` 退出
 - **智能组织**: 日志文件按日期自动分文件夹存储 (`.logcmd/2024-01-15/log_20240115_143052.log`)
 - **丰富元数据**: 记录命令、参数、执行时间、时长、退出码等信息
 - **强大搜索**: 支持关键词搜索、正则表达式、日期范围筛选、上下文显示、跨项目搜索
@@ -153,8 +156,19 @@ logcmd run -d npm start
 logcmd task list
 logcmd task stop 1
 
-# 启动交互式界面 (TUI)
+# 启动交互式界面 (TUI) - 模式系统
 logcmd ui
+# 默认进入 SearchMode
+# 快捷键:
+#   /      - 搜索模式（默认）
+#   Ctrl+P - 项目模式
+#   Ctrl+T - 任务模式
+#   Ctrl+S - 统计模式
+#   Ctrl+L - 命令模式（如 :search error, :quit）
+#   Ctrl+C - 退出
+#   Enter  - 打开选中的日志文件（在搜索结果中）
+#   Ctrl+A - 切换搜索范围（全部项目/单项目）
+#   Esc    - 清空搜索或返回
 ```
 
 日志文件格式：`.logcmd/YYYY-MM-DD/log_YYYYMMDD_HHMMSS.log`
@@ -534,37 +548,63 @@ Tests:       1 passed, 1 total
 logcmd/
 ├── cmd/
 │   └── logcmd/
-│       └── main.go           # 主程序入口
+│       ├── cmd/                # 命令行子命令
+│       │   ├── root.go
+│       │   ├── ui.go          # TUI 入口
+│       │   ├── run.go
+│       │   ├── search.go
+│       │   └── ...
+│       └── main.go            # 主程序入口
 ├── internal/
 │   ├── config/
-│   │   └── config.go         # 配置管理
+│   │   └── config.go          # 配置管理
 │   ├── executor/
-│   │   └── executor.go       # 命令执行器
+│   │   └── executor.go        # 命令执行器
 │   ├── logger/
-│   │   └── logger.go         # 日志记录核心
+│   │   └── logger.go          # 日志记录核心
 │   ├── registry/
-│   │   └── registry.go       # 增强版 Registry
+│   │   └── registry.go        # 增强版 Registry
 │   ├── search/
-│   │   └── search.go         # 日志搜索
+│   │   └── search.go          # 日志搜索
 │   ├── stats/
-│   │   ├── cache_manager.go  # 统计缓存管理
-│   │   ├── report.go         # 统一统计报告
-│   │   └── stats.go          # 日志分析与输出
-│   ├── model/                # 数据模型
-│   │   ├── project.go        # 项目模型
-│   │   ├── command.go        # 命令历史模型
-│   │   └── stats.go          # 统计缓存模型
-│   ├── migration/            # 数据库迁移
-│   │   └── migration.go      # 迁移管理器
-│   ├── history/              # 命令历史管理
-│   │   └── manager.go        # 历史记录管理器
-│   ├── persistence/          # Logger 与数据库的解耦持久化层
-│   │   ├── run_repository.go # 负责项目注册与命令历史写入
-│   │   └── stats_updater.go  # Registry 统计更新适配器
-├── examples/                 # 示例代码
-│   └── database_demo.go      # 数据库功能示例
-├── docs/                     # 文档
-│   └── DATABASE_ARCHITECTURE.md  # 数据库架构设计
+│   │   ├── cache_manager.go   # 统计缓存管理
+│   │   ├── report.go          # 统一统计报告
+│   │   └── stats.go           # 日志分析与输出
+│   ├── ui/                    # TUI 模式系统
+│   │   ├── app.go             # 应用主模型
+│   │   ├── common/            # 通用组件和样式
+│   │   ├── components/        # UI 组件（panel, footer 等）
+│   │   ├── modes/             # 模式实现
+│   │   │   ├── mode.go        # Mode 接口定义
+│   │   │   ├── search.go      # 搜索模式
+│   │   │   ├── logview.go     # 日志查看模式
+│   │   │   ├── project.go     # 项目模式
+│   │   │   ├── task.go        # 任务模式
+│   │   │   ├── stats.go       # 统计模式
+│   │   │   └── command.go     # 命令模式
+│   │   └── modules/           # 可复用模块
+│   │       ├── projectlist/
+│   │       ├── taskmanager/
+│   │       └── statspanel/
+│   ├── model/                 # 数据模型
+│   │   ├── project.go         # 项目模型
+│   │   ├── command.go         # 命令历史模型
+│   │   ├── task.go            # 任务模型
+│   │   └── stats.go           # 统计缓存模型
+│   ├── migration/             # 数据库迁移
+│   │   └── migration.go       # 迁移管理器
+│   ├── history/               # 命令历史管理
+│   │   └── manager.go         # 历史记录管理器
+│   ├── tasks/                 # 任务管理
+│   │   └── manager.go         # 任务管理器
+│   └── persistence/           # Logger 与数据库的解耦持久化层
+│       ├── run_repository.go  # 负责项目注册与命令历史写入
+│       └── stats_updater.go   # Registry 统计更新适配器
+├── examples/                  # 示例代码
+│   └── database_demo.go       # 数据库功能示例
+├── docs/                      # 文档
+│   ├── DATABASE_ARCHITECTURE.md    # 数据库架构设计
+│   └── UI_REDESIGN_MINIMAL.md      # UI 重构设计文档
 ├── go.mod
 ├── go.sum
 ├── Makefile

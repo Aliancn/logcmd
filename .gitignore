@@ -5,6 +5,7 @@ bin/
 *.dll
 *.so
 *.dylib
+logcmd
 
 # 测试文件
 *.test
@@ -30,7 +31,7 @@ go.work.sum
 .DS_Store
 .claude
 .codex
-
+    
 # 临时文件
 tmp/
 temp/

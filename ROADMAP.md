@@ -10,17 +10,23 @@
         - `logcmd clean` 命令，支持按天数 (`--days`) 和数量 (`--keep`) 手动清理。
         - 自动清理配置: `max_retention_days` 和 `max_retention_count`，每次执行命令时在后台自动维护。
 
-## P1: 交互体验升级 (Interactive Experience)
+## P1: 交互体验升级 (Interactive Experience) ✅
 *从"命令行工具"进化为"终端应用"，大幅提升易用性。*
 
 - [x] **交互式终端界面 (TUI)**
     - **需求**: `search` 和 `list` 命令的输出是静态的，查看详情需要复制路径再打开，体验割裂。
-    - **功能**: 引入 TUI 库 (如 bubbletea)。
-        - **Dashboard**: 键盘上下选择项目/日志。
-        - **Preview**: 选中日志即时预览内容。
-        - **Filter**: 界面内直接输入关键词过滤。
-    - **命令**: `logcmd ui` 或 `logcmd browse`。
-    - **状态**: 已完成 Dashboard、项目管理、任务管理、搜索和统计模块。
+    - **功能**: 引入 TUI 库 (bubbletea + bubbles)。
+        - **极简模式系统**: 类似 vim 的设计，单一焦点模式
+        - **SearchMode**: 实时模糊搜索，支持全项目/单项目范围切换
+        - **LogViewMode**: 完整日志查看，关键词高亮，自动定位
+        - **ProjectMode**: 项目管理，快速切换到项目日志
+        - **TaskMode**: 后台任务管理，实时日志预览
+        - **StatsMode**: 统计分析，支持全局和项目级统计
+        - **CommandMode**: vim 风格命令输入（`:search`, `:quit` 等）
+        - **快捷键**: `/` 搜索, `p` 项目, `t` 任务, `s` 统计, `:` 命令, `q` 退出
+    - **命令**: `logcmd ui`
+    - **状态**: ✅ 已完成 (Phase 1-4)
+    - **架构文档**: [UI_REDESIGN_MINIMAL.md](./docs/UI_REDESIGN_MINIMAL.md)
 
 ## P2: 高级分析与处理 (Advanced Analysis)
 *挖掘日志数据的价值。*

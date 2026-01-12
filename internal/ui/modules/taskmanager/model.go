@@ -518,12 +518,12 @@ func newKeyMap() keyMap {
 			key.WithHelp("r", "刷新"),
 		),
 		Stop: key.NewBinding(
-			key.WithKeys("s"),
-			key.WithHelp("s", "停止任务"),
+			key.WithKeys("x"),
+			key.WithHelp("x", "停止任务"),
 		),
 		Kill: key.NewBinding(
 			key.WithKeys("k"),
-			key.WithHelp("k", "终止任务"),
+			key.WithHelp("k", "强制终止"),
 		),
 	}
 }

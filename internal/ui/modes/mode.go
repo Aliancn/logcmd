@@ -81,6 +81,8 @@ type OpenLogFileMsg struct {
 	FilePath    string
 	LineNum     int
 	SearchQuery string
+	ReturnMode  string
+	Follow      bool
 }
 
 // SearchWithKeywordMsg 是带关键词的搜索消息

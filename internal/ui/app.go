@@ -133,7 +133,11 @@ func (app *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 处理打开日志文件请求
 		if logViewMode, ok := app.modes["logview"].(*modes.LogViewMode); ok {
 			// 设置日志文件信息
-			logViewMode.SetFile(msg.FilePath, msg.LineNum, msg.SearchQuery)
+			returnMode := msg.ReturnMode
+			if returnMode == "" {
+				returnMode = "search"
+			}
+			logViewMode.SetFile(msg.FilePath, msg.LineNum, msg.SearchQuery, returnMode, msg.Follow)
 			// 切换到日志查看模式
 			return app, app.SwitchMode("logview")
 		}

@@ -36,14 +36,14 @@ type SearchMode struct {
 	list  list.Model      // 结果列表
 
 	// 搜索状态
-	allItems       []SearchItem    // 所有已加载的日志条目
-	filteredItems  []SearchItem    // 过滤后的结果
-	currentProject *model.Project  // 当前限定的项目（nil=全部）
-	searchAll      bool            // 是否搜索所有项目
-	loaded         bool            // 数据是否已加载
-	loading        bool            // 是否正在加载
-	loadProgress   string          // 加载进度提示
-	errorMsg       string          // 错误消息
+	allItems       []SearchItem   // 所有已加载的日志条目
+	filteredItems  []SearchItem   // 过滤后的结果
+	currentProject *model.Project // 当前限定的项目（nil=全部）
+	searchAll      bool           // 是否搜索所有项目
+	loaded         bool           // 数据是否已加载
+	loading        bool           // 是否正在加载
+	loadProgress   string         // 加载进度提示
+	errorMsg       string         // 错误消息
 
 	// 配置
 	caseSensitive bool // 大小写敏感
@@ -271,13 +271,17 @@ func (m *SearchMode) HandleKey(key string) (bool, tea.Cmd) {
 					FilePath:    item.Result.FilePath,
 					LineNum:     item.Result.LineNum,
 					SearchQuery: m.input.Value(),
+					ReturnMode:  "search",
+					Follow:      false,
 				}
 			}
 		}
 	case "ctrl+a":
 		// 切换搜索范围
-		m.toggleSearchScope()
-		return true, m.loadAllLogsCmd()
+		if m.toggleSearchScope() {
+			return true, m.loadAllLogsCmd()
+		}
+		return true, nil
 	case "esc":
 		// 清空搜索
 		if m.input.Value() != "" {
@@ -420,9 +424,18 @@ func (m *SearchMode) updateListItems() {
 }
 
 // toggleSearchScope 切换搜索范围
-func (m *SearchMode) toggleSearchScope() {
-	m.searchAll = !m.searchAll
+func (m *SearchMode) toggleSearchScope() bool {
+	if m.searchAll {
+		if m.currentProject == nil {
+			m.errorMsg = "请先在项目模式选择项目后再切换到单项目搜索"
+			return false
+		}
+		m.searchAll = false
+	} else {
+		m.searchAll = true
+	}
 	m.loaded = false
+	return true
 }
 
 // resolveLogDir 返回项目日志目录，兼容已经指向 .logcmd 的路径

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,6 +25,8 @@ type LogViewMode struct {
 	filePath    string
 	lineNum     int    // 目标行号
 	searchQuery string // 搜索关键词（用于高亮）
+	returnMode  string
+	follow      bool
 
 	// UI 组件
 	viewport viewport.Model
@@ -32,6 +35,7 @@ type LogViewMode struct {
 	content string
 	loaded  bool
 	error   error
+	active  bool
 
 	// 布局
 	width  int
@@ -40,6 +44,9 @@ type LogViewMode struct {
 	// 样式
 	theme  common.Theme
 	styles common.Styles
+
+	// 配置
+	followInterval time.Duration
 }
 
 // NewLogViewMode 创建日志查看模式
@@ -47,9 +54,10 @@ func NewLogViewMode(theme common.Theme, styles common.Styles) *LogViewMode {
 	vp := viewport.New(0, 0)
 
 	return &LogViewMode{
-		viewport: vp,
-		theme:    theme,
-		styles:   styles,
+		viewport:       vp,
+		theme:          theme,
+		styles:         styles,
+		followInterval: time.Second,
 	}
 }
 
@@ -60,19 +68,29 @@ func (m *LogViewMode) Name() string {
 
 // Activate 实现 Mode 接口
 func (m *LogViewMode) Activate() tea.Cmd {
-	// 激活时加载文件内容
-	if !m.loaded && m.filePath != "" {
-		return m.loadFileCmd()
+	m.active = true
+
+	var cmds []tea.Cmd
+	if m.filePath != "" {
+		cmds = append(cmds, m.loadFileCmd())
 	}
-	return nil
+	if m.follow {
+		cmds = append(cmds, m.followTickCmd())
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // Deactivate 实现 Mode 接口
 func (m *LogViewMode) Deactivate() tea.Cmd {
+	m.active = false
 	// 清理状态
 	m.content = ""
 	m.loaded = false
 	m.error = nil
+	m.follow = false
 	return nil
 }
 
@@ -103,8 +121,9 @@ func (m *LogViewMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 		// 设置viewport内容
 		m.viewport.SetContent(m.renderContent())
 
-		// 跳转到目标行
-		if m.lineNum > 0 {
+		if m.follow {
+			m.viewport.GotoBottom()
+		} else if m.lineNum > 0 {
 			m.gotoLine(m.lineNum)
 		}
 
@@ -115,12 +134,22 @@ func (m *LogViewMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 		m.loaded = true
 		return m, nil
 
+	case followTickMsg:
+		if m.follow && m.active && m.filePath != "" {
+			return m, tea.Batch(m.loadFileCmd(), m.followTickCmd())
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "esc":
-			// 返回搜索模式
+			// 返回原模式
+			mode := m.returnMode
+			if mode == "" {
+				mode = "search"
+			}
 			return m, func() tea.Msg {
-				return SwitchModeMsg{ModeName: "search"}
+				return SwitchModeMsg{ModeName: mode}
 			}
 		}
 	}
@@ -166,10 +195,15 @@ func (m *LogViewMode) HandleKey(key string) (bool, tea.Cmd) {
 }
 
 // SetFile 设置要查看的文件
-func (m *LogViewMode) SetFile(filePath string, lineNum int, searchQuery string) {
+func (m *LogViewMode) SetFile(filePath string, lineNum int, searchQuery string, returnMode string, follow bool) {
 	m.filePath = filePath
 	m.lineNum = lineNum
 	m.searchQuery = searchQuery
+	if returnMode == "" {
+		returnMode = "search"
+	}
+	m.returnMode = returnMode
+	m.follow = follow
 	m.loaded = false
 	m.error = nil
 }
@@ -184,6 +218,16 @@ func (m *LogViewMode) loadFileCmd() tea.Cmd {
 
 		return fileLoadedMsg{content: string(data)}
 	}
+}
+
+func (m *LogViewMode) followTickCmd() tea.Cmd {
+	if !m.follow || m.followInterval <= 0 {
+		return nil
+	}
+	interval := m.followInterval
+	return tea.Tick(interval, func(time.Time) tea.Msg {
+		return followTickMsg{}
+	})
 }
 
 // renderContent 渲染文件内容（带行号和高亮）
@@ -295,6 +339,9 @@ func (m *LogViewMode) renderStatusBar() string {
 	if m.lineNum > 0 {
 		status += fmt.Sprintf(" · 行 %d", m.lineNum)
 	}
+	if m.follow {
+		status += " · 实时"
+	}
 
 	statusStyle := lipgloss.NewStyle().
 		Foreground(m.theme.Foreground).
@@ -307,7 +354,11 @@ func (m *LogViewMode) renderStatusBar() string {
 
 // renderFooter 渲染底部提示
 func (m *LogViewMode) renderFooter() string {
-	hints := "↑↓ 滚动 · PgUp/PgDn 翻页 · q/Esc 返回搜索"
+	modeName := displayModeName(m.returnMode)
+	hints := fmt.Sprintf("↑↓ 滚动 · PgUp/PgDn 翻页 · q/Esc 返回%s", modeName)
+	if m.follow {
+		hints += " · 实时刷新中"
+	}
 
 	footerStyle := lipgloss.NewStyle().
 		Foreground(m.theme.TextMuted).
@@ -372,4 +423,23 @@ type fileLoadedMsg struct {
 
 type fileLoadFailedMsg struct {
 	err error
+}
+
+type followTickMsg struct{}
+
+func displayModeName(mode string) string {
+	switch mode {
+	case "task":
+		return "任务"
+	case "project":
+		return "项目"
+	case "stats":
+		return "统计"
+	case "command":
+		return "命令"
+	case "logview":
+		return "日志"
+	default:
+		return "搜索"
+	}
 }

@@ -71,15 +71,6 @@ func (m *TaskMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 		m.height = msg.Height
 		m.taskManager.SetSize(msg.Width, msg.Height)
 		return m, nil
-
-	case tea.KeyMsg:
-		// 处理任务模式的特殊快捷键
-		switch msg.String() {
-		case "enter":
-			// TODO: 实现日志实时查看功能
-			// 当前taskmanager已经有viewport预览，这里可以扩展为全屏日志查看
-			// 暂时使用taskmanager默认的预览功能
-		}
 	}
 
 	// 转发消息到 taskmanager 组件
@@ -107,8 +98,27 @@ func (m *TaskMode) View() string {
 
 // HandleKey 实现 Mode 接口
 func (m *TaskMode) HandleKey(key string) (bool, tea.Cmd) {
-	// 任务模式暂时没有额外的全局快捷键需要处理
-	// x 和 k 已经在 taskmanager 内部处理
+	if key == "enter" {
+		task := m.taskManager.SelectedTask()
+		if task == nil {
+			m.taskManager.SetStatusMessage("请选择一个任务查看日志")
+			return true, nil
+		}
+		if task.LogFilePath == "" {
+			m.taskManager.SetStatusMessage("该任务没有日志输出")
+			return true, nil
+		}
+		m.taskManager.SetStatusMessage(fmt.Sprintf("打开任务 #%d 实时日志", task.ID))
+		return true, func() tea.Msg {
+			return OpenLogFileMsg{
+				FilePath:    task.LogFilePath,
+				LineNum:     0,
+				SearchQuery: "",
+				ReturnMode:  "task",
+				Follow:      true,
+			}
+		}
+	}
 	return false, nil
 }
 

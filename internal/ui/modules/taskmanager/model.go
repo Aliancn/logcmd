@@ -109,11 +109,7 @@ func (m *Model) SetSize(width, height int) {
 
 	// 更新footer（如果有状态消息则显示，否则显示帮助）
 	var footer string
-	defaultHints := common.JoinKeyHelps(
-		common.FormatKeyHelp(m.keys.Refresh),
-		common.FormatKeyHelp(m.keys.Stop),
-		common.FormatKeyHelp(m.keys.Kill),
-	)
+	defaultHints := m.defaultFooterHints()
 	if m.statusMsg != "" {
 		footer = common.JoinKeyHelps(m.statusMsg, defaultHints)
 	} else {
@@ -189,11 +185,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			cmds = append(cmds, m.loadTasksCmd())
 		case key.Matches(msg, m.keys.Stop):
 			if task := m.selectedTask(); task != nil {
+				m.statusMsg = fmt.Sprintf("正在请求停止任务 #%d...", task.ID)
 				cmds = append(cmds, m.stopTaskCmd(task, false))
+			} else {
+				m.statusMsg = "请选择任务"
 			}
 		case key.Matches(msg, m.keys.Kill):
 			if task := m.selectedTask(); task != nil {
+				m.statusMsg = fmt.Sprintf("正在强制终止任务 #%d...", task.ID)
 				cmds = append(cmds, m.stopTaskCmd(task, true))
+			} else {
+				m.statusMsg = "请选择任务"
 			}
 		}
 	case refreshTickMsg:
@@ -259,11 +261,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // View 渲染任务列表。
 func (m Model) View() string {
 	// 确保footer是最新的
-	defaultHints := common.JoinKeyHelps(
-		common.FormatKeyHelp(m.keys.Refresh),
-		common.FormatKeyHelp(m.keys.Stop),
-		common.FormatKeyHelp(m.keys.Kill),
-	)
+	defaultHints := m.defaultFooterHints()
 	if m.statusMsg != "" {
 		m.panel.SetFooter(common.JoinKeyHelps(m.statusMsg, defaultHints))
 	} else {
@@ -359,6 +357,25 @@ func (m Model) selectedTask() *model.Task {
 		return nil
 	}
 	return item.task
+}
+
+// SelectedTask 对外暴露当前选中的任务
+func (m Model) SelectedTask() *model.Task {
+	return m.selectedTask()
+}
+
+// SetStatusMessage 更新底部状态提示
+func (m *Model) SetStatusMessage(msg string) {
+	m.statusMsg = msg
+}
+
+func (m *Model) defaultFooterHints() string {
+	return common.JoinKeyHelps(
+		"Enter 查看日志",
+		common.FormatKeyHelp(m.keys.Refresh),
+		common.FormatKeyHelp(m.keys.Stop),
+		common.FormatKeyHelp(m.keys.Kill),
+	)
 }
 
 func (m Model) loadTasksCmd() tea.Cmd {

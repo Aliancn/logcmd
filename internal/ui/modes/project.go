@@ -6,8 +6,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/aliancn/logcmd/internal/history"
+	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/registry"
 	"github.com/aliancn/logcmd/internal/ui/common"
+	"github.com/aliancn/logcmd/internal/ui/modules/historylist"
 	"github.com/aliancn/logcmd/internal/ui/modules/projectlist"
 )
 
@@ -18,16 +21,28 @@ import (
 //   - 添加、删除项目
 //   - 选择项目并切换到搜索模式
 //   - 查看项目统计
+type projectViewState int
+
+const (
+	projectViewList projectViewState = iota
+	projectViewHistory
+)
+
 type ProjectMode struct {
 	// 依赖
 	registry *registry.Registry
 
 	// UI 组件
 	projectList projectlist.Model
+	historyList historylist.Model
 
 	// 布局
 	width  int
 	height int
+
+	// 状态
+	viewState       projectViewState
+	selectedProject *model.Project
 
 	// 样式
 	theme  common.Theme
@@ -35,10 +50,12 @@ type ProjectMode struct {
 }
 
 // NewProjectMode 创建项目模式
-func NewProjectMode(reg *registry.Registry, theme common.Theme, styles common.Styles) *ProjectMode {
+func NewProjectMode(reg *registry.Registry, historyMgr *history.Manager, theme common.Theme, styles common.Styles) *ProjectMode {
 	return &ProjectMode{
 		registry:    reg,
 		projectList: projectlist.New(reg, theme, styles),
+		historyList: historylist.New(historyMgr, theme, styles),
+		viewState:   projectViewList,
 		theme:       theme,
 		styles:      styles,
 	}
@@ -52,6 +69,9 @@ func (m *ProjectMode) Name() string {
 // Activate 实现 Mode 接口
 func (m *ProjectMode) Activate() tea.Cmd {
 	// 激活时加载项目列表
+	m.viewState = projectViewList
+	m.selectedProject = nil
+	m.historyList.SetProject(nil)
 	return m.projectList.Init()
 }
 
@@ -62,54 +82,82 @@ func (m *ProjectMode) Deactivate() tea.Cmd {
 
 // Update 实现 Mode 接口
 func (m *ProjectMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
-	var cmd tea.Cmd
-
-	switch msg := msg.(type) {
+	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.projectList.SetSize(msg.Width, msg.Height)
+		m.width = typed.Width
+		m.height = typed.Height
+		m.resizeComponents()
 		return m, nil
 
 	case tea.KeyMsg:
-		// 检查是否在输入模式，如果是则不处理模式级快捷键
-		if !m.projectList.CanUseGlobalShortcuts() {
-			// 在添加/删除确认等模式下，交给projectlist处理
-			var model tea.Model
-			model, cmd = m.projectList.Update(msg)
-			m.projectList = model.(projectlist.Model)
-			return m, cmd
-		}
-
-		// 处理项目模式的特殊快捷键
-		switch msg.String() {
-		case "enter":
-			// 选择项目并切换到搜索模式
-			if proj := m.projectList.CurrentProject(); proj != nil {
-				return m, func() tea.Msg {
-					return SwitchModeMsg{
-						ModeName: "search",
-						Data:     proj, // 传递选中的项目
-					}
-				}
+		if m.viewState == projectViewHistory {
+			if typed.Type == tea.KeyEsc || typed.String() == "esc" {
+				return m, m.exitHistoryView()
 			}
-		case "v":
-			// 查看项目统计 - 切换到统计模式
-			if proj := m.projectList.CurrentProject(); proj != nil {
+			if typed.String() == "v" && m.selectedProject != nil {
 				return m, func() tea.Msg {
 					return SwitchModeMsg{
 						ModeName: "stats",
-						Data:     proj,
+						Data:     m.selectedProject,
 					}
+				}
+			}
+		} else {
+			// 检查是否在输入模式，如果是则不处理模式级快捷键
+			if !m.projectList.CanUseGlobalShortcuts() {
+				var model tea.Model
+				var cmd tea.Cmd
+				model, cmd = m.projectList.Update(msg)
+				m.projectList = model.(projectlist.Model)
+				return m, cmd
+			}
+
+			switch typed.String() {
+			case "v":
+				// 查看项目统计 - 切换到统计模式
+				if proj := m.projectList.CurrentProject(); proj != nil {
+					return m, func() tea.Msg {
+						return SwitchModeMsg{
+							ModeName: "stats",
+							Data:     proj,
+						}
+					}
+				}
+			}
+		}
+
+	case projectlist.ProjectSelectedMsg:
+		return m, m.enterHistoryView(typed.Project)
+
+	case projectlist.ProjectDeletedMsg:
+		if m.selectedProject != nil && typed.ProjectID == m.selectedProject.ID {
+			return m, m.exitHistoryView()
+		}
+
+	case historylist.OpenLogMsg:
+		if typed.History != nil && typed.History.LogFilePath != "" {
+			h := typed.History
+			return m, func() tea.Msg {
+				return OpenLogFileMsg{
+					FilePath:    h.LogFilePath,
+					LineNum:     0,
+					SearchQuery: h.CommandName,
+					ReturnMode:  "project",
+					Follow:      false,
 				}
 			}
 		}
 	}
 
-	// 转发消息到 projectlist 组件
-	var model tea.Model
-	model, cmd = m.projectList.Update(msg)
-	m.projectList = model.(projectlist.Model)
+	var cmd tea.Cmd
+	switch m.viewState {
+	case projectViewHistory:
+		m.historyList, cmd = m.historyList.Update(msg)
+	default:
+		var model tea.Model
+		model, cmd = m.projectList.Update(msg)
+		m.projectList = model.(projectlist.Model)
+	}
 	return m, cmd
 }
 
@@ -122,12 +170,16 @@ func (m *ProjectMode) View() string {
 	// 状态栏
 	statusBar := m.renderStatusBar()
 
-	// 项目列表（使用panel渲染）
-	listView := m.projectList.View()
+	var mainView string
+	if m.viewState == projectViewHistory {
+		mainView = m.historyList.View()
+	} else {
+		mainView = m.projectList.View()
+	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		statusBar,
-		listView,
+		mainView,
 	)
 }
 
@@ -140,20 +192,65 @@ func (m *ProjectMode) HandleKey(key string) (bool, tea.Cmd) {
 
 // renderStatusBar 渲染状态栏
 func (m *ProjectMode) renderStatusBar() string {
-	// 获取项目数量
-	projects, err := m.registry.List()
-	projectCount := 0
-	if err == nil {
-		projectCount = len(projects)
-	}
-
-	status := fmt.Sprintf("[项目] %d 个已注册", projectCount)
-
 	statusStyle := lipgloss.NewStyle().
 		Foreground(m.theme.Foreground).
 		Background(m.theme.StatusBar).
 		Padding(0, 1).
 		Width(m.width)
 
+	if m.viewState == projectViewHistory {
+		status := "[运行记录] 未选择项目 · esc 返回"
+		if m.selectedProject != nil {
+			status = fmt.Sprintf("[运行记录] #%d %s · enter 查看日志 · r 刷新 · f 筛选 · esc 返回",
+				m.selectedProject.ID,
+				m.selectedProject.Name)
+		}
+		return statusStyle.Render(status)
+	}
+
+	projectCount := m.projectCount()
+	status := fmt.Sprintf("[项目] %d 个已注册 · enter 运行记录 · a 添加 · d 删除 · v 统计", projectCount)
 	return statusStyle.Render(status)
+}
+
+func (m *ProjectMode) projectCount() int {
+	if m.registry == nil {
+		return 0
+	}
+	projects, err := m.registry.List()
+	if err != nil {
+		return 0
+	}
+	return len(projects)
+}
+
+func (m *ProjectMode) resizeComponents() {
+	if m.width == 0 || m.height == 0 {
+		return
+	}
+	contentHeight := m.height - 1
+	if contentHeight < 1 {
+		contentHeight = m.height
+	}
+	m.projectList.SetSize(m.width, contentHeight)
+	m.historyList.SetSize(m.width, contentHeight)
+}
+
+func (m *ProjectMode) enterHistoryView(proj *model.Project) tea.Cmd {
+	if proj == nil {
+		return nil
+	}
+	m.viewState = projectViewHistory
+	m.selectedProject = proj
+	m.historyList.SetProject(proj)
+	m.resizeComponents()
+	return m.historyList.LoadHistoryCmd()
+}
+
+func (m *ProjectMode) exitHistoryView() tea.Cmd {
+	m.viewState = projectViewList
+	m.selectedProject = nil
+	m.historyList.SetProject(nil)
+	m.resizeComponents()
+	return nil
 }

@@ -327,7 +327,7 @@ func (m *SearchMode) loadAllLogs() tea.Cmd {
    - `:set case on/off`、`:set context <n>` 只是输出提示，`SearchMode` 中的 `caseSensitive`、`contextLines` 没有被应用，也没有重新加载数据。
 2. **命令模式功能缺失**
    - `:project <id>`、`:stats`、`:clean` 等命令尚未真正执行对应操作，无法在命令模式里切换项目、打开统计视图或清理无效项目，需要与 registry 及其他模式对接。
-3. **搜索范围切换体验**
+3. **搜索范围切换体验（已完成）**
    - `Ctrl+A` 在没有选中项目时仍会切换到“单项目”范围并返回空列表，应当阻止该行为或要求先由 `ProjectMode` 传入目标项目。
 4. **任务模式交互（已完成）**
    - `Enter` 现已接入 LogViewMode 的实时刷新能力，可 tail 当前任务日志并按 q/Esc 回到任务模式。

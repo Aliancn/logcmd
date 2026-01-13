@@ -56,7 +56,7 @@ func NewApp(reg *registry.Registry, historyMgr *history.Manager, taskMgr *tasks.
 
 	// 注册所有模式
 	app.modes["search"] = modes.NewSearchMode(reg, historyMgr, app.theme, app.styles)
-	app.modes["project"] = modes.NewProjectMode(reg, app.theme, app.styles)
+	app.modes["project"] = modes.NewProjectMode(reg, historyMgr, app.theme, app.styles)
 	app.modes["task"] = modes.NewTaskMode(taskMgr, app.theme, app.styles)
 	app.modes["stats"] = modes.NewStatsMode(historyMgr, app.theme, app.styles)
 	app.modes["command"] = modes.NewCommandMode(app.theme, app.styles)

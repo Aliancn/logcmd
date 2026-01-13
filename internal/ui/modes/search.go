@@ -60,14 +60,17 @@ type SearchMode struct {
 
 // SearchItem 表示一条搜索结果
 type SearchItem struct {
-	Project     *model.Project
-	Result      *search.SearchResult
-	DisplayText string // 预渲染的显示文本
+	Project         *model.Project
+	Result          *search.SearchResult
+	DisplayText     string // 第一行：文件路径、行号、项目信息
+	ContentText     string // 第二行：完整日志内容（预渲染，含高亮）
+	OriginalContent string // 原始日志内容（用于 fuzzy 匹配）
+	SearchKeyword   string // 当前搜索关键词（用于高亮）
 }
 
 // 实现 list.Item 接口
 func (i SearchItem) Title() string       { return i.DisplayText }
-func (i SearchItem) Description() string { return "" }
+func (i SearchItem) Description() string { return i.ContentText }
 func (i SearchItem) FilterValue() string { return i.DisplayText }
 
 // NewSearchMode 创建搜索模式
@@ -81,7 +84,18 @@ func NewSearchMode(reg *registry.Registry, historyMgr *history.Manager, theme co
 
 	// 创建结果列表
 	delegate := list.NewDefaultDelegate()
-	delegate.ShowDescription = false
+	delegate.ShowDescription = true
+
+	// 配置 Description 样式
+	delegate.Styles.NormalDesc = lipgloss.NewStyle().
+		Foreground(theme.TextMuted).
+		Padding(0, 0, 0, 2) // 左侧缩进 2 个字符
+
+	// 选中状态下也使用浅灰色，不设置背景（保持视觉层次）
+	delegate.Styles.SelectedDesc = lipgloss.NewStyle().
+		Foreground(theme.TextMuted).
+		Padding(0, 0, 0, 2)
+
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = "搜索结果"
 	l.SetShowStatusBar(true)
@@ -369,13 +383,18 @@ func (m *SearchMode) loadAllLogsCmd() tea.Cmd {
 
 			// 流式扫描
 			searcher.Search(ctx, func(result *search.SearchResult) error {
-				// 预渲染显示文本
-				displayText := formatSearchResult(proj, result)
+				// 预渲染第一行
+				titleText := formatSearchResultTitle(proj, result)
+				// 预渲染第二行（无关键词）
+				contentText := formatSearchResultContent(result, "", m.theme)
 
 				items = append(items, SearchItem{
-					Project:     proj,
-					Result:      result,
-					DisplayText: displayText,
+					Project:         proj,
+					Result:          result,
+					DisplayText:     titleText,
+					ContentText:     contentText,
+					OriginalContent: strings.TrimSpace(result.Line),
+					SearchKeyword:   "",
 				})
 
 				return nil
@@ -392,22 +411,45 @@ func (m *SearchMode) performSearchCmd() tea.Cmd {
 		query := strings.TrimSpace(m.input.Value())
 
 		if query == "" {
-			// 空查询，显示所有项
-			return searchCompleteMsg{results: m.allItems}
+			// 空查询，显示所有项（移除高亮）
+			results := make([]SearchItem, len(m.allItems))
+			for i, item := range m.allItems {
+				results[i] = SearchItem{
+					Project:         item.Project,
+					Result:          item.Result,
+					DisplayText:     item.DisplayText,
+					ContentText:     formatSearchResultContent(item.Result, "", m.theme),
+					OriginalContent: item.OriginalContent,
+					SearchKeyword:   "",
+				}
+			}
+			return searchCompleteMsg{results: results}
 		}
 
-		// 使用 sahilm/fuzzy 进行模糊匹配
+		// 使用 fuzzy.Find 进行模糊匹配（仅匹配日志内容）
 		strs := make([]string, len(m.allItems))
 		for i, item := range m.allItems {
-			strs[i] = item.DisplayText
+			strs[i] = item.OriginalContent
 		}
 
 		matches := fuzzy.Find(query, strs)
 
-		// 构建匹配结果
+		// 构建匹配结果，重新渲染带高亮的 ContentText
 		results := make([]SearchItem, len(matches))
 		for i, match := range matches {
-			results[i] = m.allItems[match.Index]
+			originalItem := m.allItems[match.Index]
+
+			// 重新渲染第二行，添加关键词高亮
+			contentText := formatSearchResultContent(originalItem.Result, query, m.theme)
+
+			results[i] = SearchItem{
+				Project:         originalItem.Project,
+				Result:          originalItem.Result,
+				DisplayText:     originalItem.DisplayText,
+				ContentText:     contentText,
+				OriginalContent: originalItem.OriginalContent,
+				SearchKeyword:   query,
+			}
 		}
 
 		return searchCompleteMsg{results: results}
@@ -451,19 +493,52 @@ func (m *SearchMode) resolveLogDir(proj *model.Project) string {
 	return filepath.Join(path, ".logcmd")
 }
 
-// formatSearchResult 格式化搜索结果显示
-func formatSearchResult(proj *model.Project, result *search.SearchResult) string {
+// formatSearchResultTitle 格式化第一行：文件路径、行号、项目信息
+func formatSearchResultTitle(proj *model.Project, result *search.SearchResult) string {
 	// 相对路径
 	relPath := strings.TrimPrefix(result.FilePath, proj.Path)
 	relPath = strings.TrimPrefix(relPath, "/")
 
-	// 格式: "file.log:42 [P#1] content preview"
-	content := strings.TrimSpace(result.Line)
-	if len(content) > 80 {
-		content = content[:77] + "..."
+	// 优化路径显示：如果过长，保留文件名和部分路径
+	if len(relPath) > 60 {
+		parts := strings.Split(relPath, "/")
+		if len(parts) > 2 {
+			relPath = ".../" + strings.Join(parts[len(parts)-2:], "/")
+		}
 	}
 
-	return fmt.Sprintf("%s:%d [P#%d] %s", relPath, result.LineNum, proj.ID, content)
+	return fmt.Sprintf("%s:%d [P#%d]", relPath, result.LineNum, proj.ID)
+}
+
+// formatSearchResultContent 格式化第二行：完整日志内容（带高亮）
+func formatSearchResultContent(result *search.SearchResult, keyword string, theme common.Theme) string {
+	content := strings.TrimSpace(result.Line)
+
+	// 内容长度控制（可选，防止超长行）
+	const maxContentLength = 200
+	if len([]rune(content)) > maxContentLength {
+		runes := []rune(content)
+		content = string(runes[:maxContentLength-3]) + "..."
+	}
+
+	// 如果没有搜索关键词，直接返回灰色文本
+	if keyword == "" {
+		return lipgloss.NewStyle().
+			Foreground(theme.TextMuted).
+			Render(content)
+	}
+
+	// 高亮关键词
+	highlightStyle := lipgloss.NewStyle().
+		Foreground(theme.TextHighlight).
+		Bold(true)
+
+	highlightedContent := highlightKeyword(content, keyword, highlightStyle)
+
+	// 整体使用浅灰色
+	return lipgloss.NewStyle().
+		Foreground(theme.TextMuted).
+		Render(highlightedContent)
 }
 
 // renderStatusBar 渲染状态栏

@@ -188,6 +188,29 @@ assert_equals() {
 }
 
 #######################################
+# 断言字符串不包含
+# Arguments:
+#   $1 - 主字符串
+#   $2 - 不应包含的子字符串
+#######################################
+assert_not_contains() {
+    local haystack="$1"
+    local needle="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+
+    if [[ "$haystack" == *"$needle"* ]]; then
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo -e "${RED}  ✗ FAIL: 不应包含内容${NC}"
+        echo -e "${YELLOW}    意外内容: $needle${NC}"
+        return 1
+    else
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo -e "${GREEN}  ✓ PASS: 未包含禁止内容${NC}"
+        return 0
+    fi
+}
+
+#######################################
 # 执行logcmd命令
 # Arguments:
 #   $@ - logcmd 参数

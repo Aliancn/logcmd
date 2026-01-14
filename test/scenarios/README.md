@@ -14,8 +14,6 @@ test/scenarios/
 │   └── test_basic.sh
 ├── project/          # 项目管理测试
 │   └── test_project.sh
-├── stats/            # 统计和搜索测试
-│   └── test_stats.sh
 ├── template/         # 模板配置测试
 │   └── test_template.sh
 ├── tail/             # tail 实时查看测试
@@ -46,9 +44,6 @@ make test-scenarios-basic
 # 项目管理测试
 make test-scenarios-project
 
-# 统计和搜索测试
-make test-scenarios-stats
-
 # 模板配置测试
 make test-scenarios-template
 
@@ -61,7 +56,6 @@ make test-scenarios-tail
 ```bash
 ./test/scenarios/run_all.sh basic
 ./test/scenarios/run_all.sh project
-./test/scenarios/run_all.sh stats
 ./test/scenarios/run_all.sh template
 ./test/scenarios/run_all.sh tail
 ```
@@ -92,19 +86,7 @@ make test-scenarios-tail
 - ✅ 项目清理功能
 - ✅ 多项目管理
 
-### 3. 统计和搜索测试 (stats)
-
-测试日志统计分析和搜索功能。
-
-**测试用例：**
-- ✅ 日志统计分析
-- ✅ 搜索日志内容
-- ✅ 搜索不存在的内容
-- ✅ 历史记录查询
-- ✅ 统计命令频率
-- ✅ 按日期查询日志
-
-### 4. 模板配置测试 (template)
+### 3. 模板配置测试 (template)
 
 测试日志文件命名模板功能。
 
@@ -116,7 +98,7 @@ make test-scenarios-tail
 - ✅ 文件名安全字符处理
 - ✅ 项目名称提取
 
-### 5. tail 功能测试 (tail)
+### 4. tail 功能测试 (tail)
 
 验证后台任务日志的查询能力，包括静态查看与实时跟踪。
 

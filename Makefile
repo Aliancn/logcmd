@@ -98,10 +98,6 @@ test-scenarios-project: build
 	@echo "运行项目管理场景测试..."
 	@./test/scenarios/run_all.sh project
 
-test-scenarios-stats: build
-	@echo "运行统计和搜索场景测试..."
-	@./test/scenarios/run_all.sh stats
-
 test-scenarios-template: build
 	@echo "运行模板配置场景测试..."
 	@./test/scenarios/run_all.sh template
@@ -185,7 +181,6 @@ help:
 	@echo "  make test-scenarios            - 运行所有场景测试"
 	@echo "  make test-scenarios-basic      - 运行基础场景测试"
 	@echo "  make test-scenarios-project    - 运行项目管理场景测试"
-	@echo "  make test-scenarios-stats      - 运行统计和搜索场景测试"
 	@echo "  make test-scenarios-template   - 运行模板配置场景测试"
 	@echo "  make test-scenarios-long-log   - 运行大文件输出性能测试"
 	@echo "  make test-all                  - 运行所有测试（单元+场景）"

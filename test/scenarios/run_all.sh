@@ -29,7 +29,6 @@ get_suite_description() {
     case "$1" in
         basic) echo "基础功能测试" ;;
         project) echo "项目管理测试" ;;
-        stats) echo "统计和搜索测试" ;;
         template) echo "模板配置测试" ;;
         tail) echo "tail 功能测试" ;;
         long_log) echo "大文件输出性能测试" ;;
@@ -158,7 +157,8 @@ main() {
 
     # 如果指定了特定套件，只运行该套件
     if [[ -n "$specific_suite" ]]; then
-        local suite_desc=$(get_suite_description "$specific_suite")
+        local suite_desc
+        suite_desc=$(get_suite_description "$specific_suite")
         if [[ "$suite_desc" != "未知测试" ]]; then
             run_test_suite "$specific_suite" "$suite_desc"
         else
@@ -166,7 +166,6 @@ main() {
             echo -e "${YELLOW}可用的测试套件:${NC}"
             echo "  - basic: 基础功能测试"
             echo "  - project: 项目管理测试"
-            echo "  - stats: 统计和搜索测试"
             echo "  - template: 模板配置测试"
             echo "  - tail: tail 功能测试"
             echo "  - long_log: 大文件输出性能测试"
@@ -174,8 +173,8 @@ main() {
         fi
     else
         # 运行所有测试套件
-        for suite in basic project stats template tail long_log; do
-            run_test_suite "$suite" "$(get_suite_description $suite)" || true
+        for suite in basic project template tail long_log; do
+            run_test_suite "$suite" "$(get_suite_description "$suite")" || true
         done
     fi
 

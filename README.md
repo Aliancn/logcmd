@@ -173,37 +173,22 @@ logcmd ui
 
 日志文件格式：`.logcmd/YYYY-MM-DD/log_YYYYMMDD_HHMMSS.log`
 
-### 2. 搜索日志
+### 2. 搜索日志（SearchMode）
 
-```bash
-# 搜索包含 "error" 的日志
-logcmd search -keyword "error"
+`logcmd ui` 默认进入搜索模式。所有项目的日志会被增量加载到内存，输入即搜，适合快速查找最近的命令输出。
 
-# 使用正则表达式搜索
-logcmd search -keyword "error|fail|panic" -regex
+- 直接输入关键词即可实时过滤，支持中文/英文混合模糊匹配。
+- `Enter` 打开选中的日志文件，`Ctrl+A` 切换搜索范围（当前项目/全局）。
+- `Esc` 清空搜索，`Ctrl+P`/`Ctrl+T`/`Ctrl+S` 随时切换其他模式。
+- 需要命令式操作时按 `Ctrl+L` 进入 CommandMode，可执行 `:search <keyword>`、`:set case on/off`、`:set context <n>` 等指令，保持与旧版 CLI 搜索一致的体验。
 
-# 显示上下文（前后各3行）
-logcmd search -keyword "timeout" -context 3
+### 3. 统计分析（StatsMode）
 
-# 按日期范围搜索
-logcmd search -keyword "error" -start 2024-01-01 -end 2024-01-31
+统计面板也通过 `logcmd ui` 提供，按 `Ctrl+S` 即可切换到 StatsMode：
 
-# 区分大小写搜索
-logcmd search -keyword "Error" -case
-```
-
-### 3. 统计分析
-
-```bash
-# 分析所有日志
-logcmd -stats
-
-# 分析指定目录的日志
-logcmd -stats -dir ./mylogs
-
-# 分析所有已注册目录的日志
-logcmd -stats -all
-```
+- 默认展示全局统计（命令总数、成功率、耗时趋势、Top 命令等），按 `a` 键在全局与当前项目之间切换。
+- `r` 手动刷新，或在项目模式中选择项目后再次进入 StatsMode 以查看该项目详情。
+- 所有统计数据仍由 `internal/stats` 服务驱动，只是入口统一到了 UI，不再需要单独的 CLI 子命令。
 
 统计报告包括：
 - 总命令数、成功率、失败率
@@ -255,6 +240,24 @@ ID    路径                                                 最后检查时间
 logcmd project clean
 ```
 
+执行时会显示需要删除的项目清单并要求确认，可通过 `--force` 跳过确认直接删除。
+
+#### 清理旧日志和历史记录
+
+为避免全局日志无限增长，可以在 `project clean` 中指定条件：
+
+```bash
+# 删除 30 天前的记录
+logcmd project clean --days 30
+
+# 仅保留最近 500 条记录，并跳过确认
+logcmd project clean --keep 500 --force
+```
+
+说明：
+- 未提供 `--days`/`--keep` 时，`project clean` 会像以往一样仅清理不存在的项目。
+- `--days` 与 `--keep` 可组合使用，执行前会提示确认，可通过 `--force` 跳过（同样适用于无效项目清理）。
+
 #### 删除项目
 
 ```bash
@@ -295,25 +298,11 @@ logcmd task kill 3
 
 搜索所有已注册项目中的日志：
 
-```bash
-# 在所有项目中搜索
-logcmd search -keyword "error" -all
-
-# 使用正则表达式搜索所有项目
-logcmd search -keyword "error|fail" -regex -all
-```
-
-跨项目搜索会自动清理不存在的项目。
+在 SearchMode 中按 `Ctrl+A` 可切换“当前项目 / 全部项目”两种范围。切换为全局时，LogCmd 会自动移除已失效的项目路径，并在所有注册项目中搜索匹配内容。
 
 #### 跨项目统计
 
-统计所有已注册项目的日志：
-
-```bash
-logcmd stats -all
-```
-
-跨项目统计会自动清理不存在的项目。
+进入 StatsMode (`Ctrl+S`) 后，按 `a` 键即可在“全局统计”和“当前项目统计”之间切换。切换为全局后会自动跳过已删除的项目目录，保持数据库干净。
 
 ## 配置指南
 
@@ -365,11 +354,11 @@ Build successful!
 
 ### 示例 2: 搜索错误日志
 
-```bash
-logcmd search -keyword "error" -regex -context 2
-```
+1. 执行 `logcmd ui`，保持在默认的 SearchMode。
+2. 输入 `error`（或任意关键字），搜索结果列表即时刷新。
+3. 选中目标记录并按 `Enter` 打开完整日志。
 
-输出：
+示意输出：
 ```
 找到 3 条匹配记录:
 
@@ -406,21 +395,16 @@ logcmd project clean
 # 自动删除 old-project 的记录
 
 # 场景4：跨所有项目搜索错误
-logcmd search -keyword "error|fail" -regex -all
-# 在所有项目中搜索，自动跳过已删除的项目
+logcmd ui
+# 默认进入 SearchMode，按 Ctrl+A 切换为“全部项目”，输入 error|fail 即可实时查看命中结果
 
 # 场景5：查看所有项目的统计
-logcmd stats -all
-# 显示每个项目的统计报告
+# 在 UI 中按 Ctrl+S 切换到 StatsMode，再按 a 查看全局统计面板
 ```
 
 ### 示例 4: 统计报告
 
-```bash
-logcmd stats
-```
-
-输出：
+在 StatsMode 中可以看到类似的统计输出：
 ```
 ============================================================
 日志统计分析报告
@@ -469,30 +453,6 @@ logcmd run [选项] <command> [args...]
 选项：
 - `-d`: 以后台任务方式运行命令 (`task` 子命令可管理)
 
-### 搜索命令
-```bash
-logcmd search [选项]
-```
-
-选项：
-- `-keyword string`: 搜索关键词（必需）
-- `-regex`: 使用正则表达式
-- `-case`: 区分大小写
-- `-context int`: 显示上下文行数
-- `-start string`: 开始日期 (YYYY-MM-DD)
-- `-end string`: 结束日期 (YYYY-MM-DD)
-- `-dir string`: 日志目录路径
-- `-all`: 搜索所有已注册项目
-
-### 统计命令
-```bash
-logcmd stats [选项]
-```
-
-选项：
-- `-dir string`: 日志目录路径
-- `-all`: 统计所有已注册项目
-
 ### 项目管理命令
 ```bash
 logcmd project <command>
@@ -500,7 +460,7 @@ logcmd project <command>
 
 命令：
 - `list`: 列出所有已注册的项目
-- `clean`: 清理不存在的项目
+- `clean`: 默认清理不存在的项目，附加 `--days` / `--keep` 时用于清理旧日志与历史记录
 - `delete <id|path>`: 删除指定的项目（支持ID或路径）
 
 ### 任务管理命令

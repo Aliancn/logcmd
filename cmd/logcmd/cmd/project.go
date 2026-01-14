@@ -27,9 +27,12 @@ var projectListCmd = &cobra.Command{
 
 var projectCleanCmd = &cobra.Command{
 	Use:   "clean",
-	Short: "清理不存在的项目",
+	Short: "清理不存在的项目或旧日志",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return cleanProjects()
+		if projectCleanDays <= 0 && projectCleanKeep <= 0 {
+			return cleanProjects()
+		}
+		return runProjectClean()
 	},
 }
 
@@ -43,6 +46,11 @@ var projectDeleteCmd = &cobra.Command{
 }
 
 var projectDeleteForce bool
+var (
+	projectCleanDays  int
+	projectCleanKeep  int
+	projectCleanForce bool
+)
 
 func init() {
 	rootCmd.AddCommand(projectCmd)
@@ -51,6 +59,9 @@ func init() {
 	projectCmd.AddCommand(projectDeleteCmd)
 
 	projectDeleteCmd.Flags().BoolVar(&projectDeleteForce, "force", false, "跳过确认直接删除项目及日志目录")
+	projectCleanCmd.Flags().IntVar(&projectCleanDays, "days", 0, "删除超过指定天数的日志")
+	projectCleanCmd.Flags().IntVar(&projectCleanKeep, "keep", 0, "仅保留最近的 N 条记录")
+	projectCleanCmd.Flags().BoolVarP(&projectCleanForce, "force", "f", false, "跳过 project clean 的确认提示")
 }
 
 func listProjects() error {
@@ -245,11 +256,105 @@ func cleanProjects() error {
 	defer services.Close()
 	reg := services.Registry()
 
+	projects, err := reg.List()
+	if err != nil {
+		return fmt.Errorf("获取项目列表失败: %w", err)
+	}
+
+	totalProjects := len(projects)
+	if totalProjects == 0 {
+		fmt.Println("没有需要清理的项目。")
+		return nil
+	}
+
+	var invalidProjects []*model.Project
+	for _, project := range projects {
+		if _, statErr := os.Stat(project.Path); os.IsNotExist(statErr) {
+			invalidProjects = append(invalidProjects, project)
+		}
+	}
+
+	validCount := totalProjects - len(invalidProjects)
+	fmt.Printf("共检查 %d 个项目，%d 个目录正常，%d 个目录不存在。\n", totalProjects, validCount, len(invalidProjects))
+
+	if len(invalidProjects) == 0 {
+		if err := reg.CheckAndCleanup(); err != nil {
+			return fmt.Errorf("更新检查时间失败: %w", err)
+		}
+		fmt.Println("未发现需要清理的项目。")
+		return nil
+	}
+
+	fmt.Println("以下项目将被删除（日志目录不存在）：")
+	for _, project := range invalidProjects {
+		displayName := strings.TrimSpace(project.Name)
+		if displayName == "" {
+			displayName = template.GetProjectName(project.Path)
+		}
+		fmt.Printf("- ID=%d 名称=\"%s\" 路径=%s\n", project.ID, displayName, project.Path)
+	}
+
+	if !projectCleanForce {
+		fmt.Print("确认删除以上项目? [yes/N]: ")
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		normalized := strings.ToLower(strings.TrimSpace(input))
+		if normalized != "yes" && normalized != "y" && normalized != "确认" {
+			fmt.Println("清理操作已取消")
+			return nil
+		}
+	}
+
 	if err := reg.CheckAndCleanup(); err != nil {
 		return fmt.Errorf("清理失败: %w", err)
 	}
 
-	fmt.Println("清理完成")
+	fmt.Printf("已删除 %d 个无效项目，目录不存在。\n", len(invalidProjects))
+	return nil
+}
+
+func runProjectClean() error {
+	if projectCleanDays <= 0 && projectCleanKeep <= 0 {
+		return fmt.Errorf("请指定清理条件: --days 或 --keep")
+	}
+
+	services, err := newCLIServices()
+	if err != nil {
+		return err
+	}
+	defer services.Close()
+
+	histMgr := services.HistoryManager()
+
+	if !projectCleanForce {
+		fmt.Println("⚠️  警告: 此操作将永久删除日志文件和数据库记录。")
+		if projectCleanDays > 0 {
+			fmt.Printf("- 删除 %d 天前的记录\n", projectCleanDays)
+		}
+		if projectCleanKeep > 0 {
+			fmt.Printf("- 仅保留最近 %d 条记录\n", projectCleanKeep)
+		}
+		fmt.Print("确认执行? [y/N]: ")
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(input)) != "y" {
+			fmt.Println("操作已取消")
+			return nil
+		}
+	}
+
+	if projectCleanDays > 0 {
+		if err := histMgr.DeleteOldRecords(projectCleanDays); err != nil {
+			return err
+		}
+	}
+
+	if projectCleanKeep > 0 {
+		if err := histMgr.DeleteExcessRecords(projectCleanKeep); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

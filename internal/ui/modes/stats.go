@@ -74,7 +74,7 @@ func (m *StatsMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.statsPanel.SetSize(msg.Width, msg.Height)
+		m.statsPanel.SetSize(msg.Width, msg.Height-1)
 		return m, nil
 
 	case tea.KeyMsg:

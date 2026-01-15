@@ -151,8 +151,8 @@ func (m *SearchMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 		// 更新组件尺寸
 		m.input.Width = msg.Width - 4
 
-		// 列表高度 = 总高度 - 状态栏(3行) - 输入框区域(4行) - 底部提示(2行)
-		listHeight := msg.Height - 9
+		// 列表高度 = 总高度 - 状态栏(1行) - 输入框区域(3行) - 底部提示(1行)
+		listHeight := msg.Height - 5
 		if listHeight < 5 {
 			listHeight = 5
 		}

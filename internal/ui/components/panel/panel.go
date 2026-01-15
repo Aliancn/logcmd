@@ -144,6 +144,27 @@ func (p *Panel) Render(content string) string {
 	// 添加主内容
 	finalContent += content
 
+	// 计算并填充空白行，将Footer推到底部
+	// 可用总高度
+	availableHeight := p.height
+	if p.showBorder {
+		availableHeight -= 2
+	}
+	// content height
+	currentLines := lipgloss.Height(finalContent)
+
+	// footer height
+	footerHeight := 0
+	if p.footer != "" {
+		footerHeight = blockHeight(p.footer)
+	}
+
+	// 需要填充的行数
+	neededFill := availableHeight - currentLines - footerHeight
+	if neededFill > 0 {
+		finalContent += strings.Repeat("\n", neededFill)
+	}
+
 	// 添加footer（如果有）
 	if p.footer != "" {
 		// 确保footer占满宽度且背景一致

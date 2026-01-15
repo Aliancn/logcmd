@@ -69,7 +69,7 @@ func (m *TaskMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.taskManager.SetSize(msg.Width, msg.Height)
+		m.taskManager.SetSize(msg.Width, msg.Height-1)
 		return m, nil
 	}
 

@@ -82,6 +82,7 @@ type OpenLogFileMsg struct {
 	LineNum     int
 	SearchQuery string
 	ReturnMode  string
+	ReturnData  interface{}
 	Follow      bool
 }
 

@@ -27,6 +27,7 @@ type LogViewMode struct {
 	searchQuery string // 搜索关键词（用于高亮）
 	returnMode  string
 	follow      bool
+	returnData  interface{}
 
 	// UI 组件
 	viewport viewport.Model
@@ -91,6 +92,7 @@ func (m *LogViewMode) Deactivate() tea.Cmd {
 	m.loaded = false
 	m.error = nil
 	m.follow = false
+	m.returnData = nil
 	return nil
 }
 
@@ -149,7 +151,10 @@ func (m *LogViewMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 				mode = "search"
 			}
 			return m, func() tea.Msg {
-				return SwitchModeMsg{ModeName: mode}
+				return SwitchModeMsg{
+					ModeName: mode,
+					Data:     m.returnData,
+				}
 			}
 		}
 	}
@@ -195,7 +200,7 @@ func (m *LogViewMode) HandleKey(key string) (bool, tea.Cmd) {
 }
 
 // SetFile 设置要查看的文件
-func (m *LogViewMode) SetFile(filePath string, lineNum int, searchQuery string, returnMode string, follow bool) {
+func (m *LogViewMode) SetFile(filePath string, lineNum int, searchQuery string, returnMode string, follow bool, returnData interface{}) {
 	m.filePath = filePath
 	m.lineNum = lineNum
 	m.searchQuery = searchQuery
@@ -204,6 +209,7 @@ func (m *LogViewMode) SetFile(filePath string, lineNum int, searchQuery string, 
 	}
 	m.returnMode = returnMode
 	m.follow = follow
+	m.returnData = returnData
 	m.loaded = false
 	m.error = nil
 }

@@ -120,6 +120,13 @@ func (app *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		if msg.Data != nil && msg.ModeName == "project" {
+			if state, ok := msg.Data.(*modes.ProjectReturnState); ok {
+				if projectMode, ok := app.modes["project"].(*modes.ProjectMode); ok {
+					projectMode.SetReturnState(state)
+				}
+			}
+		}
 		if msg.Data != nil && msg.ModeName == "stats" {
 			if proj, ok := msg.Data.(*model.Project); ok {
 				if statsMode, ok := app.modes["stats"].(*modes.StatsMode); ok {
@@ -137,7 +144,7 @@ func (app *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if returnMode == "" {
 				returnMode = "search"
 			}
-			logViewMode.SetFile(msg.FilePath, msg.LineNum, msg.SearchQuery, returnMode, msg.Follow)
+			logViewMode.SetFile(msg.FilePath, msg.LineNum, msg.SearchQuery, returnMode, msg.Follow, msg.ReturnData)
 			// 切换到日志查看模式
 			return app, app.SwitchMode("logview")
 		}

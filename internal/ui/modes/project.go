@@ -28,6 +28,12 @@ const (
 	projectViewHistory
 )
 
+// ProjectReturnState 表示切回项目模式时需要恢复的状态。
+type ProjectReturnState struct {
+	SelectedProject *model.Project
+	ShowHistory     bool
+}
+
 type ProjectMode struct {
 	// 依赖
 	registry *registry.Registry
@@ -43,6 +49,7 @@ type ProjectMode struct {
 	// 状态
 	viewState       projectViewState
 	selectedProject *model.Project
+	pendingState    *ProjectReturnState
 
 	// 样式
 	theme  common.Theme
@@ -68,6 +75,14 @@ func (m *ProjectMode) Name() string {
 
 // Activate 实现 Mode 接口
 func (m *ProjectMode) Activate() tea.Cmd {
+	if m.pendingState != nil {
+		state := m.pendingState
+		m.pendingState = nil
+		if state.ShowHistory && state.SelectedProject != nil {
+			return m.enterHistoryView(state.SelectedProject)
+		}
+	}
+
 	// 激活时加载项目列表
 	m.viewState = projectViewList
 	m.selectedProject = nil
@@ -137,12 +152,14 @@ func (m *ProjectMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 	case historylist.OpenLogMsg:
 		if typed.History != nil && typed.History.LogFilePath != "" {
 			h := typed.History
+			returnState := m.historyReturnState()
 			return m, func() tea.Msg {
 				return OpenLogFileMsg{
 					FilePath:    h.LogFilePath,
 					LineNum:     0,
 					SearchQuery: h.CommandName,
 					ReturnMode:  "project",
+					ReturnData:  returnState,
 					Follow:      false,
 				}
 			}
@@ -253,4 +270,20 @@ func (m *ProjectMode) exitHistoryView() tea.Cmd {
 	m.historyList.SetProject(nil)
 	m.resizeComponents()
 	return nil
+}
+
+// SetReturnState 设置待恢复的视图状态。
+func (m *ProjectMode) SetReturnState(state *ProjectReturnState) {
+	m.pendingState = state
+}
+
+func (m *ProjectMode) historyReturnState() *ProjectReturnState {
+	if m.viewState != projectViewHistory || m.selectedProject == nil {
+		return nil
+	}
+	projectCopy := *m.selectedProject
+	return &ProjectReturnState{
+		SelectedProject: &projectCopy,
+		ShowHistory:     true,
+	}
 }

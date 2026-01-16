@@ -1,32 +1,16 @@
 package stats
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/aliancn/logcmd/internal/logparser"
 	"github.com/aliancn/logcmd/internal/walker"
-)
-
-const (
-	maxHeaderScanLines = 32
-	logFooterReadSize  = 16 * 1024
-)
-
-var (
-	cmdRegex      = regexp.MustCompile(`^命令:\s*(.+)$`)
-	exitCodeRegex = regexp.MustCompile(`^退出码:\s*(\d+)$`)
-	statusRegex   = regexp.MustCompile(`^执行状态:\s*(\S+)$`)
-	durationRegex = regexp.MustCompile(`^执行时长:\s*(.+)$`)
-	dateRegex     = regexp.MustCompile(`^# 时间:\s*(.+)$`)
 )
 
 // SourceType 标识统计数据来源
@@ -61,15 +45,6 @@ type DayStats struct {
 	Success  int
 	Failed   int
 	Duration time.Duration
-}
-
-// LogMetadata 从日志中解析的元数据
-type LogMetadata struct {
-	Command  string
-	ExitCode int
-	Success  bool
-	Duration time.Duration
-	Date     string
 }
 
 // Analyzer 统计分析器
@@ -136,22 +111,17 @@ func (a *Analyzer) analyzeFile(ctx context.Context, filePath string) error {
 	}
 	defer file.Close()
 
-	metadata := &LogMetadata{}
-
-	if err := parseLogHeader(ctx, file, metadata); err != nil {
+	metadata, err := logparser.ParseFile(ctx, filePath)
+	if err != nil {
 		return err
 	}
 
-	if err := parseLogFooter(ctx, file, metadata); err != nil {
-		return err
-	}
-
-	if metadata.Command == "" {
+	if metadata.CommandName == "" || !metadata.CommandFromFooter {
 		fmt.Fprintf(os.Stderr, "跳过缺少元数据的日志: %s\n", filePath)
 		return nil
 	}
 
-	if metadata.Date == "" {
+	if metadata.LogDate == "" {
 		fmt.Fprintf(os.Stderr, "警告: 日志缺少时间信息，仅统计命令: %s\n", filePath)
 	}
 
@@ -159,104 +129,8 @@ func (a *Analyzer) analyzeFile(ctx context.Context, filePath string) error {
 	return nil
 }
 
-func parseLogHeader(ctx context.Context, file io.Reader, meta *LogMetadata) error {
-	if seeker, ok := file.(io.Seeker); ok {
-		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-			return err
-		}
-	}
-
-	scanner := bufio.NewScanner(file)
-	lines := 0
-	for scanner.Scan() {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		line := scanner.Text()
-		lines++
-		if matches := dateRegex.FindStringSubmatch(line); matches != nil {
-			if t, err := time.Parse("2006-01-02 15:04:05", matches[1]); err == nil {
-				meta.Date = t.Format("2006-01-02")
-			}
-			break
-		}
-		if lines >= maxHeaderScanLines {
-			break
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	return nil
-}
-
-func parseLogFooter(ctx context.Context, file *os.File, meta *LogMetadata) error {
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-
-	size := info.Size()
-	if size == 0 {
-		return nil
-	}
-
-	readSize := logFooterReadSize
-	if int64(readSize) > size {
-		readSize = int(size)
-	}
-	start := size - int64(readSize)
-	buf := make([]byte, readSize)
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	if _, err := file.ReadAt(buf, start); err != nil && err != io.EOF {
-		return err
-	}
-
-	processFooterBuffer(buf, meta)
-	return nil
-}
-
-func processFooterBuffer(buf []byte, meta *LogMetadata) {
-	lines := bytes.Split(buf, []byte{'\n'})
-	for _, line := range lines {
-		lineStr := string(bytes.TrimSpace(line))
-		if len(lineStr) == 0 {
-			continue
-		}
-
-		if matches := cmdRegex.FindStringSubmatch(lineStr); matches != nil {
-			parts := strings.Fields(matches[1])
-			if len(parts) > 0 {
-				meta.Command = parts[0]
-			}
-		}
-
-		if matches := exitCodeRegex.FindStringSubmatch(lineStr); matches != nil {
-			fmt.Sscanf(matches[1], "%d", &meta.ExitCode)
-		}
-
-		if matches := statusRegex.FindStringSubmatch(lineStr); matches != nil {
-			meta.Success = matches[1] == "成功"
-		}
-
-		if matches := durationRegex.FindStringSubmatch(lineStr); matches != nil {
-			duration, _ := time.ParseDuration(strings.ReplaceAll(matches[1], " ", ""))
-			meta.Duration = duration
-		}
-	}
-}
-
 // updateStats 更新统计数据
-func (a *Analyzer) updateStats(meta *LogMetadata) {
+func (a *Analyzer) updateStats(meta *logparser.Metadata) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -275,15 +149,15 @@ func (a *Analyzer) updateStats(meta *LogMetadata) {
 	if meta.Duration > 0 && (a.stats.MinDuration == 0 || meta.Duration < a.stats.MinDuration) {
 		a.stats.MinDuration = meta.Duration
 	}
-	a.stats.CommandCounts[meta.Command]++
+	a.stats.CommandCounts[meta.CommandName]++
 	a.stats.ExitCodes[meta.ExitCode]++
 
 	// 更新每日统计
-	if meta.Date != "" {
-		dayStats, exists := a.stats.DailyStats[meta.Date]
+	if meta.LogDate != "" {
+		dayStats, exists := a.stats.DailyStats[meta.LogDate]
 		if !exists {
-			dayStats = &DayStats{Date: meta.Date}
-			a.stats.DailyStats[meta.Date] = dayStats
+			dayStats = &DayStats{Date: meta.LogDate}
+			a.stats.DailyStats[meta.LogDate] = dayStats
 		}
 		dayStats.Commands++
 		if meta.Success {

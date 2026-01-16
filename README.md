@@ -461,6 +461,7 @@ logcmd project <command>
 命令：
 - `list`: 列出所有已注册的项目
 - `clean`: 默认清理不存在的项目，附加 `--days` / `--keep` 时用于清理旧日志与历史记录
+- `async`: 同步日志文件与数据库记录（以日志为准）
 - `delete <id|path>`: 删除指定的项目（支持ID或路径）
 
 ### 任务管理命令

@@ -17,16 +17,20 @@ import (
 
 // Model 展示项目运行历史。
 type Model struct {
-	manager *history.Manager
-	project *model.Project
-	list    list.Model
-	panel   *panel.Panel
-	keys    keyMap
-	theme   common.Theme
-	styles  common.Styles
-	width   int
-	height  int
-	filter  statusFilter
+	manager          *history.Manager
+	project          *model.Project
+	list             list.Model
+	panel            *panel.Panel
+	keys             keyMap
+	theme            common.Theme
+	styles           common.Styles
+	width            int
+	height           int
+	filter           statusFilter
+	statusMsg        string
+	confirmingDelete bool
+	deleteTargetID   int
+	deleteTargetName string
 }
 
 // HistoriesLoadedMsg 表示历史记录加载完成。
@@ -41,6 +45,11 @@ type BackToProjectsMsg struct{}
 // OpenLogMsg 请求打开日志。
 type OpenLogMsg struct {
 	History *model.CommandHistory
+}
+
+// HistoryDeletedMsg 表示删除完成。
+type HistoryDeletedMsg struct {
+	HistoryID int
 }
 
 // New 创建历史列表 Model。
@@ -59,7 +68,7 @@ func New(manager *history.Manager, theme common.Theme, styles common.Styles) Mod
 
 	keys := newKeyMap()
 	l.AdditionalShortHelpKeys = func() []key.Binding {
-		return []key.Binding{keys.Open, keys.Refresh, keys.Filter}
+		return []key.Binding{keys.Open, keys.Refresh, keys.Filter, keys.Delete}
 	}
 
 	// 创建Panel布局容器
@@ -82,6 +91,8 @@ func New(manager *history.Manager, theme common.Theme, styles common.Styles) Mod
 func (m *Model) SetProject(project *model.Project) {
 	m.project = project
 	m.list.SetItems(nil)
+	m.resetDeleteState()
+	m.setStatus("")
 	m.updateTitle()
 }
 
@@ -112,12 +123,7 @@ func (m *Model) SetSize(width, height int) {
 	// 设置list使用精确的内容尺寸
 	m.list.SetSize(contentW, contentH)
 
-	// 仅展示此视图独有的快捷键
-	m.panel.SetFooter(common.JoinKeyHelps(
-		common.FormatKeyHelp(m.keys.Open),
-		common.FormatKeyHelp(m.keys.Refresh),
-		common.FormatKeyHelp(m.keys.Filter),
-	))
+	m.updateFooter()
 }
 
 // LoadHistoryCmd 触发历史加载。
@@ -146,38 +152,66 @@ func (m Model) LoadHistoryCmd() tea.Cmd {
 // Update 处理消息。
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	shouldUpdateList := true
 
-	switch msg := msg.(type) {
+	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.SetSize(msg.Width, msg.Height)
+		m.SetSize(typed.Width, typed.Height)
 	case tea.KeyMsg:
+		if m.confirmingDelete {
+			shouldUpdateList = false
+			var cmd tea.Cmd
+			m, cmd = m.handleDeleteConfirmation(typed)
+			cmds = append(cmds, cmd)
+			break
+		}
 		switch {
-		case key.Matches(msg, m.keys.Open):
+		case key.Matches(typed, m.keys.Open):
 			if item, ok := m.list.SelectedItem().(historyItem); ok {
 				h := item.history
 				cmds = append(cmds, func() tea.Msg { return OpenLogMsg{History: h} })
 			}
-		case key.Matches(msg, m.keys.Refresh):
+		case key.Matches(typed, m.keys.Refresh):
 			cmds = append(cmds, m.LoadHistoryCmd())
-		case key.Matches(msg, m.keys.Filter):
+		case key.Matches(typed, m.keys.Filter):
 			m.filter = m.filter.next()
 			m.updateTitle()
 			cmds = append(cmds, m.LoadHistoryCmd())
+		case key.Matches(typed, m.keys.Delete):
+			shouldUpdateList = false
+			if item, ok := m.list.SelectedItem().(historyItem); ok && item.history != nil {
+				m.confirmingDelete = true
+				m.deleteTargetID = item.history.ID
+				name := strings.TrimSpace(item.history.CommandName)
+				if name == "" {
+					name = strings.TrimSpace(item.history.Command)
+				}
+				m.deleteTargetName = name
+				m.updateFooter()
+			} else {
+				m.setStatus("请选择一条记录")
+			}
 		}
 	case HistoriesLoadedMsg:
-		if m.project == nil || msg.ProjectID != m.project.ID {
+		if m.project == nil || typed.ProjectID != m.project.ID {
 			break
 		}
-		items := make([]list.Item, len(msg.Histories))
-		for i, history := range msg.Histories {
+		items := make([]list.Item, len(typed.Histories))
+		for i, history := range typed.Histories {
 			items[i] = historyItem{history: history}
 		}
 		m.list.SetItems(items)
+		m.setStatus(fmt.Sprintf("共 %d 条记录", len(items)))
+	case HistoryDeletedMsg:
+		m.setStatus(fmt.Sprintf("记录 #%d 已删除", typed.HistoryID))
+		cmds = append(cmds, m.LoadHistoryCmd())
 	}
 
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	cmds = append(cmds, cmd)
+	if shouldUpdateList {
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -243,6 +277,9 @@ type keyMap struct {
 	Open    key.Binding
 	Refresh key.Binding
 	Filter  key.Binding
+	Delete  key.Binding
+	Confirm key.Binding
+	Cancel  key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -258,6 +295,18 @@ func newKeyMap() keyMap {
 		Filter: key.NewBinding(
 			key.WithKeys("f"),
 			key.WithHelp("f", "切换状态筛选"),
+		),
+		Delete: key.NewBinding(
+			key.WithKeys("x"),
+			key.WithHelp("x", "删除记录"),
+		),
+		Confirm: key.NewBinding(
+			key.WithKeys("y", "Y", "enter"),
+			key.WithHelp("y/enter", "确认删除"),
+		),
+		Cancel: key.NewBinding(
+			key.WithKeys("n", "N", "esc"),
+			key.WithHelp("n/esc", "取消"),
 		),
 	}
 }
@@ -338,4 +387,82 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%.1fs", d.Seconds())
 	}
 	return fmt.Sprintf("%dms", d.Milliseconds())
+}
+
+func (m Model) handleDeleteConfirmation(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Confirm):
+		targetID := m.deleteTargetID
+		if targetID <= 0 {
+			m.resetDeleteState()
+			m.setStatus("未找到要删除的记录")
+			return m, nil
+		}
+		m.resetDeleteState()
+		m.setStatus(fmt.Sprintf("正在删除记录 #%d...", targetID))
+		return m, m.deleteHistoryCmd(targetID)
+	case key.Matches(msg, m.keys.Cancel):
+		m.resetDeleteState()
+		m.setStatus("已取消删除")
+	}
+	return m, nil
+}
+
+func (m Model) deleteHistoryCmd(historyID int) tea.Cmd {
+	if historyID <= 0 {
+		return nil
+	}
+	if m.manager == nil {
+		return func() tea.Msg {
+			return common.ErrorMsg{Err: fmt.Errorf("无法删除记录: 历史管理器未初始化")}
+		}
+	}
+	return func() tea.Msg {
+		if err := m.manager.Delete(historyID); err != nil {
+			return common.ErrorMsg{Err: fmt.Errorf("删除历史记录失败: %w", err)}
+		}
+		return HistoryDeletedMsg{HistoryID: historyID}
+	}
+}
+
+func (m *Model) setStatus(msg string) {
+	m.statusMsg = msg
+	m.updateFooter()
+}
+
+func (m *Model) updateFooter() {
+	if m.panel == nil {
+		return
+	}
+
+	defaultHints := common.JoinKeyHelps(
+		common.FormatKeyHelp(m.keys.Open),
+		common.FormatKeyHelp(m.keys.Refresh),
+		common.FormatKeyHelp(m.keys.Filter),
+		common.FormatKeyHelp(m.keys.Delete),
+	)
+
+	footer := defaultHints
+	if m.confirmingDelete {
+		label := fmt.Sprintf("#%d", m.deleteTargetID)
+		name := strings.TrimSpace(m.deleteTargetName)
+		if name != "" {
+			label = fmt.Sprintf("%s %s", label, name)
+		}
+		footer = common.JoinKeyHelps(
+			fmt.Sprintf("确认删除 %s", label),
+			common.FormatKeyHelp(m.keys.Confirm),
+			common.FormatKeyHelp(m.keys.Cancel),
+		)
+	} else if strings.TrimSpace(m.statusMsg) != "" {
+		footer = common.JoinKeyHelps(m.statusMsg, defaultHints)
+	}
+
+	m.panel.SetFooter(footer)
+}
+
+func (m *Model) resetDeleteState() {
+	m.confirmingDelete = false
+	m.deleteTargetID = 0
+	m.deleteTargetName = ""
 }

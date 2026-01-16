@@ -87,6 +87,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("创建日志记录器失败: %w", err)
 	}
+	defer log.Close() // 确保异步持久化完成
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

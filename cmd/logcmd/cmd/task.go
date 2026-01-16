@@ -260,6 +260,7 @@ func runTaskWorker(idArg string) (retErr error) {
 		return fmt.Errorf("创建日志记录器失败: %w", err)
 	}
 	log.SetLogPath(preLogPath)
+	defer log.Close() // 确保任务的异步持久化完成
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

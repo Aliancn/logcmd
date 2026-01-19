@@ -25,6 +25,7 @@ type Model struct {
 	viewport    viewport.Model
 	panel       *panel.Panel
 	history     *model.CommandHistory
+	filePath    string // 直接指定的文件路径（优先级高于 history）
 	content     string // 小文件的完整内容（向后兼容）
 	width       int
 	height      int
@@ -147,6 +148,28 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
+// SetFile 指定要查看的日志文件路径（不依赖历史记录）。
+func (m *Model) SetFile(path string) {
+	// 清理旧的chunkedReader
+	if m.chunkedReader != nil {
+		m.chunkedReader.Close()
+		m.chunkedReader = nil
+	}
+
+	m.history = nil
+	m.filePath = path
+	m.content = ""
+	m.viewport.SetContent("")
+	m.viewport.GotoTop()
+	m.statusMsg = ""
+	m.usesChunked = false
+	m.cachedLines = nil
+	m.cacheStartLine = 0
+	m.cacheEndLine = 0
+	m.totalLines = 0
+	m.indexing = false
+}
+
 // SetHistory 指定要查看的历史记录。
 func (m *Model) SetHistory(history *model.CommandHistory) {
 	// 清理旧的chunkedReader
@@ -177,6 +200,7 @@ func (m *Model) Reset() {
 	}
 
 	m.history = nil
+	m.filePath = ""
 	m.content = ""
 	m.viewport.SetContent("")
 	m.statusMsg = ""
@@ -205,6 +229,11 @@ func (m *Model) SetSize(width, height int) {
 		headerBuilder.WriteString(mutedStyle.Render(fmt.Sprintf("日志文件: %s", m.history.LogFilePath)))
 		headerBuilder.WriteString("\n")
 		headerBuilder.WriteString(mutedStyle.Render(fmt.Sprintf("开始时间: %s", m.history.StartTime.Format(time.RFC3339))))
+		header = headerBuilder.String()
+	} else if m.filePath != "" {
+		headerStyle := lipgloss.NewStyle().Foreground(m.theme.Primary).Bold(true)
+		var headerBuilder strings.Builder
+		headerBuilder.WriteString(headerStyle.Render(fmt.Sprintf("日志文件: %s", m.filePath)))
 		header = headerBuilder.String()
 	}
 
@@ -249,11 +278,18 @@ func (m *Model) SetSize(width, height int) {
 
 // LoadContentCmd 读取日志文件。
 func (m Model) LoadContentCmd() tea.Cmd {
-	if m.history == nil || m.history.LogFilePath == "" {
+	var path string
+	var historyID int
+
+	if m.filePath != "" {
+		path = m.filePath
+		historyID = 0 // 0 表示非历史记录关联
+	} else if m.history != nil && m.history.LogFilePath != "" {
+		path = m.history.LogFilePath
+		historyID = m.history.ID
+	} else {
 		return nil
 	}
-	historyID := m.history.ID
-	path := m.history.LogFilePath
 
 	return func() tea.Msg {
 		// 先获取文件信息
@@ -542,7 +578,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			}
 		}
 	case ContentLoadedMsg:
-		if m.history == nil || msg.HistoryID != m.history.ID {
+		if (m.history != nil && msg.HistoryID != m.history.ID) && (m.filePath != "" && msg.HistoryID != 0) {
 			break
 		}
 		// 小文件模式
@@ -558,7 +594,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.updateFooter()
 
 	case IndexBuiltMsg:
-		if m.history == nil || msg.HistoryID != m.history.ID {
+		if (m.history != nil && msg.HistoryID != m.history.ID) && (m.filePath != "" && msg.HistoryID != 0) {
 			break
 		}
 		// 大文件模式
@@ -872,6 +908,18 @@ func (m *Model) JumpToLine(line int) {
 	// Viewport.SetYOffset handles validation mostly.
 	m.viewport.SetYOffset(idx)
 	m.statusMsg = fmt.Sprintf("跳转到行: %d", line)
+}
+
+// PerformSearch performs a search with the given query
+func (m *Model) PerformSearch(query string) tea.Cmd {
+	m.lastQuery = query
+	m.jumpToQuery(query)
+	
+	// 如果是大文件模式且有匹配，可能需要加载行
+	if m.usesChunked && len(m.searchMatches) > 0 {
+		return m.loadVisibleLinesCmd()
+	}
+	return nil
 }
 
 type keyMap struct {

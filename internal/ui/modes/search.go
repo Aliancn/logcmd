@@ -629,3 +629,31 @@ type logsBatchMsg struct {
 type searchCompleteMsg struct {
 	results []SearchItem
 }
+
+// highlightKeyword 高亮关键词
+func highlightKeyword(text, keyword string, style lipgloss.Style) string {
+	if keyword == "" {
+		return text
+	}
+
+	lowerText := strings.ToLower(text)
+	lowerKeyword := strings.ToLower(keyword)
+
+	var result strings.Builder
+	lastIndex := 0
+
+	for {
+		index := strings.Index(lowerText[lastIndex:], lowerKeyword)
+		if index == -1 {
+			result.WriteString(text[lastIndex:])
+			break
+		}
+
+		actualIndex := lastIndex + index
+		result.WriteString(text[lastIndex:actualIndex])
+		result.WriteString(style.Render(text[actualIndex : actualIndex+len(keyword)]))
+		lastIndex = actualIndex + len(keyword)
+	}
+
+	return result.String()
+}

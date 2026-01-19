@@ -34,6 +34,10 @@ type Model struct {
 	searchInput textinput.Model
 	searching   bool
 	lastQuery   string
+	
+	gotoInput   textinput.Model
+	goingToLine bool
+
 	statusMsg   string
 	prettyJson  bool // JSON 格式化模式
 
@@ -96,6 +100,22 @@ func New(theme common.Theme, styles common.Styles) Model {
 	input.Prompt = "/ "
 	input.Placeholder = "输入搜索关键词"
 
+	gInput := textinput.New()
+	gInput.Prompt = ":"
+	gInput.Placeholder = "行号"
+	gInput.CharLimit = 10
+	gInput.Validate = func(s string) error {
+		if s == "" {
+			return nil
+		}
+		for _, c := range s {
+			if c < '0' || c > '9' {
+				return fmt.Errorf("number required")
+			}
+		}
+		return nil
+	}
+
 	// 创建Panel布局容器
 	p := panel.NewDefault("", theme, styles)
 
@@ -113,6 +133,7 @@ func New(theme common.Theme, styles common.Styles) Model {
 		styles:          styles,
 		keys:            newKeyMap(),
 		searchInput:     input,
+		gotoInput:       gInput,
 		highlighter:     h,
 		formatter:       f,
 		bufferSize:      100, // 默认预加载100行
@@ -191,6 +212,8 @@ func (m *Model) SetSize(width, height int) {
 	var footer string
 	if m.searching {
 		footer = m.searchInput.View()
+	} else if m.goingToLine {
+		footer = m.gotoInput.View()
 	} else {
 		// 构建完整的快捷键提示
 		hints := m.buildKeyHints()
@@ -371,6 +394,34 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		}
+		if m.goingToLine {
+			var cmd tea.Cmd
+			m.gotoInput, cmd = m.gotoInput.Update(msg)
+			cmds = append(cmds, cmd)
+			if msg.Type == tea.KeyEnter {
+				m.goingToLine = false
+				val := strings.TrimSpace(m.gotoInput.Value())
+				m.gotoInput.SetValue("")
+				m.gotoInput.Blur()
+				
+				if val != "" {
+					var lineNum int
+					_, err := fmt.Sscanf(val, "%d", &lineNum)
+					if err == nil {
+						m.JumpToLine(lineNum)
+						if m.usesChunked {
+							cmds = append(cmds, m.loadVisibleLinesCmd())
+						}
+					}
+				}
+				m.updateFooter()
+			} else if msg.Type == tea.KeyEsc {
+				m.goingToLine = false
+				m.gotoInput.Blur()
+				m.updateFooter()
+			}
+			return m, tea.Batch(cmds...)
+		}
 		switch {
 		case key.Matches(msg, m.keys.Back):
 			return m, func() tea.Msg { return BackMsg{} }
@@ -379,6 +430,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.searchInput.SetValue("")
 			m.searchInput.Focus()
 			m.updateFooter() // 显示搜索输入框
+			return m, tea.Batch(cmds...)
+		case key.Matches(msg, m.keys.GotoLine):
+			m.goingToLine = true
+			m.gotoInput.SetValue("")
+			m.gotoInput.Focus()
+			m.updateFooter()
 			return m, tea.Batch(cmds...)
 		case key.Matches(msg, m.keys.ToggleJSON):
 			m.prettyJson = !m.prettyJson
@@ -694,6 +751,8 @@ func (m *Model) updateFooter() {
 	var footer string
 	if m.searching {
 		footer = m.searchInput.View()
+	} else if m.goingToLine {
+		footer = m.gotoInput.View()
 	} else {
 		hints := m.buildKeyHints()
 		if m.statusMsg != "" {
@@ -818,6 +877,7 @@ func (m *Model) JumpToLine(line int) {
 type keyMap struct {
 	Back              key.Binding
 	Search            key.Binding
+	GotoLine          key.Binding
 	Down              key.Binding
 	Up                key.Binding
 	PageDown          key.Binding
@@ -840,6 +900,10 @@ func newKeyMap() keyMap {
 		Search: key.NewBinding(
 			key.WithKeys("/"),
 			key.WithHelp("/", "搜索"),
+		),
+		GotoLine: key.NewBinding(
+			key.WithKeys(":"),
+			key.WithHelp(":", "跳转行"),
 		),
 		ToggleJSON: key.NewBinding(
 			key.WithKeys("ctrl+j"),

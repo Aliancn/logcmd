@@ -1,8 +1,6 @@
 package logviewer
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -17,6 +15,9 @@ import (
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/ui/common"
 	"github.com/aliancn/logcmd/internal/ui/components/panel"
+	"github.com/aliancn/logcmd/internal/ui/services/formatter"
+	"github.com/aliancn/logcmd/internal/ui/services/highlighter"
+	"github.com/aliancn/logcmd/internal/ui/services/reader"
 )
 
 // Model 展示日志内容。
@@ -24,7 +25,7 @@ type Model struct {
 	viewport    viewport.Model
 	panel       *panel.Panel
 	history     *model.CommandHistory
-	content     string
+	content     string // 小文件的完整内容（向后兼容）
 	width       int
 	height      int
 	theme       common.Theme
@@ -35,12 +36,54 @@ type Model struct {
 	lastQuery   string
 	statusMsg   string
 	prettyJson  bool // JSON 格式化模式
+
+	// 服务层
+	highlighter *highlighter.ChromaHighlighter
+	formatter   *formatter.JSONFormatter
+
+	// 虚拟滚动（大文件）
+	chunkedReader  *reader.ChunkedReader
+	usesChunked    bool // 是否使用分块读取
+	cachedLines    []string
+	cacheStartLine int // 缓存的起始行号（0-based）
+	cacheEndLine   int // 缓存的结束行号（0-based）
+	bufferSize     int // 预加载缓冲区大小（行数）
+	totalLines     int // 文件总行数
+	indexing       bool // 是否正在建立索引
+	indexProgress  float64 // 索引进度 0.0-1.0
+
+	// 交互功能
+	showLineNumbers bool // 是否显示行号
+	softWrap        bool // 是否软换行
+
+	// 搜索增强
+	searchMatches []int // 所有匹配行的行号
+	currentMatch  int   // 当前匹配项索引
 }
 
 // ContentLoadedMsg 表示日志内容已加载。
 type ContentLoadedMsg struct {
 	HistoryID int
 	Content   string
+}
+
+// IndexBuiltMsg 表示文件索引已构建完成
+type IndexBuiltMsg struct {
+	HistoryID int
+	Reader    *reader.ChunkedReader
+	TotalLines int
+}
+
+// LinesLoadedMsg 表示行数据已加载
+type LinesLoadedMsg struct {
+	Lines      []string
+	StartLine  int
+	EndLine    int
+}
+
+// IndexProgressMsg 表示索引进度更新
+type IndexProgressMsg struct {
+	Progress float64
 }
 
 // BackMsg 表示用户请求返回上一视图。
@@ -56,13 +99,25 @@ func New(theme common.Theme, styles common.Styles) Model {
 	// 创建Panel布局容器
 	p := panel.NewDefault("", theme, styles)
 
+	// 创建highlighter和formatter
+	h := highlighter.NewHighlighter()
+	h.SetFormat(highlighter.FormatAuto)
+	h.SetTheme("monokai")
+
+	f := formatter.NewJSONFormatter(true) // 启用彩色输出
+
 	return Model{
-		viewport:    vp,
-		panel:       p,
-		theme:       theme,
-		styles:      styles,
-		keys:        newKeyMap(),
-		searchInput: input,
+		viewport:        vp,
+		panel:           p,
+		theme:           theme,
+		styles:          styles,
+		keys:            newKeyMap(),
+		searchInput:     input,
+		highlighter:     h,
+		formatter:       f,
+		bufferSize:      100, // 默认预加载100行
+		showLineNumbers: true, // 默认显示行号
+		softWrap:        false, // 默认不换行
 	}
 }
 
@@ -73,19 +128,43 @@ func (m Model) Init() tea.Cmd {
 
 // SetHistory 指定要查看的历史记录。
 func (m *Model) SetHistory(history *model.CommandHistory) {
+	// 清理旧的chunkedReader
+	if m.chunkedReader != nil {
+		m.chunkedReader.Close()
+		m.chunkedReader = nil
+	}
+
 	m.history = history
 	m.content = ""
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
 	m.statusMsg = ""
+	m.usesChunked = false
+	m.cachedLines = nil
+	m.cacheStartLine = 0
+	m.cacheEndLine = 0
+	m.totalLines = 0
+	m.indexing = false
 }
 
 // Reset 清理状态。
 func (m *Model) Reset() {
+	// 清理chunkedReader
+	if m.chunkedReader != nil {
+		m.chunkedReader.Close()
+		m.chunkedReader = nil
+	}
+
 	m.history = nil
 	m.content = ""
 	m.viewport.SetContent("")
 	m.statusMsg = ""
+	m.usesChunked = false
+	m.cachedLines = nil
+	m.cacheStartLine = 0
+	m.cacheEndLine = 0
+	m.totalLines = 0
+	m.indexing = false
 }
 
 // SetSize 调整 viewport 大小。
@@ -113,11 +192,12 @@ func (m *Model) SetSize(width, height int) {
 	if m.searching {
 		footer = m.searchInput.View()
 	} else {
-		defaultHints := "j/k 滚动 · gg/G 跳转 · / 搜索"
+		// 构建完整的快捷键提示
+		hints := m.buildKeyHints()
 		if m.statusMsg != "" {
-			footer = common.JoinKeyHelps(m.statusMsg, defaultHints)
+			footer = common.JoinKeyHelps(m.statusMsg, hints)
 		} else {
-			footer = defaultHints
+			footer = hints
 		}
 	}
 
@@ -151,7 +231,55 @@ func (m Model) LoadContentCmd() tea.Cmd {
 	}
 	historyID := m.history.ID
 	path := m.history.LogFilePath
+
 	return func() tea.Msg {
+		// 先获取文件信息
+		fileInfo, err := os.Stat(path)
+		if err != nil {
+			return common.ErrorMsg{Err: fmt.Errorf("获取文件信息失败: %w", err)}
+		}
+
+		// 判断是否需要使用分块读取（大于10MB）
+		const chunkThreshold = 10 * 1024 * 1024 // 10MB
+
+		if fileInfo.Size() > chunkThreshold {
+			// 大文件：使用分块读取
+			chunkedReader, err := reader.NewChunkedReader(path, reader.DefaultConfig())
+			if err != nil {
+				// 分块读取失败，降级到全量读取
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					return common.ErrorMsg{Err: fmt.Errorf("读取日志失败: %w", readErr)}
+				}
+				return ContentLoadedMsg{
+					HistoryID: historyID,
+					Content:   string(data),
+				}
+			}
+
+			// 异步构建索引
+			err = chunkedReader.BuildIndex()
+			if err != nil {
+				chunkedReader.Close()
+				// 索引构建失败，降级到全量读取
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					return common.ErrorMsg{Err: fmt.Errorf("读取日志失败: %w", readErr)}
+				}
+				return ContentLoadedMsg{
+					HistoryID: historyID,
+					Content:   string(data),
+				}
+			}
+
+			return IndexBuiltMsg{
+				HistoryID:  historyID,
+				Reader:     chunkedReader,
+				TotalLines: chunkedReader.TotalLines(),
+			}
+		}
+
+		// 小文件：直接全量读取
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return common.ErrorMsg{Err: fmt.Errorf("读取日志失败: %w", err)}
@@ -161,6 +289,56 @@ func (m Model) LoadContentCmd() tea.Cmd {
 			Content:   string(data),
 		}
 	}
+}
+
+// loadVisibleLinesCmd 加载可见区域的行
+func (m Model) loadVisibleLinesCmd() tea.Cmd {
+	if !m.usesChunked || m.chunkedReader == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		// 计算需要加载的行范围
+		visibleStart := m.viewport.YOffset
+		visibleEnd := visibleStart + m.viewport.Height
+
+		// 添加缓冲区
+		start := visibleStart - m.bufferSize
+		if start < 0 {
+			start = 0
+		}
+
+		end := visibleEnd + m.bufferSize
+		if end >= m.totalLines {
+			end = m.totalLines - 1
+		}
+
+		// 读取行
+		lines, err := m.chunkedReader.ReadLines(start, end)
+		if err != nil {
+			return common.ErrorMsg{Err: fmt.Errorf("加载行失败: %w", err)}
+		}
+
+		return LinesLoadedMsg{
+			Lines:     lines,
+			StartLine: start,
+			EndLine:   end,
+		}
+	}
+}
+
+// needsReload 检查是否需要重新加载行
+func (m Model) needsReload() bool {
+	if !m.usesChunked {
+		return false
+	}
+
+	offset := m.viewport.YOffset
+	threshold := m.bufferSize / 2
+
+	// 如果接近缓存边界，需要重新加载
+	return offset < m.cacheStartLine+threshold ||
+		offset+m.viewport.Height > m.cacheEndLine-threshold
 }
 
 // Update 处理消息。
@@ -181,9 +359,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.searchInput.SetValue("")
 				m.searchInput.Blur()
 				m.jumpToQuery(m.lastQuery)
+				m.updateFooter() // 更新footer显示n/N导航提示
+				// 如果是大文件模式，需要加载匹配行
+				if m.usesChunked && len(m.searchMatches) > 0 {
+					cmds = append(cmds, m.loadVisibleLinesCmd())
+				}
 			} else if msg.Type == tea.KeyEsc {
 				m.searching = false
 				m.searchInput.Blur()
+				m.updateFooter()
 			}
 			return m, tea.Batch(cmds...)
 		}
@@ -194,34 +378,118 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.searching = true
 			m.searchInput.SetValue("")
 			m.searchInput.Focus()
+			m.updateFooter() // 显示搜索输入框
 			return m, tea.Batch(cmds...)
 		case key.Matches(msg, m.keys.ToggleJSON):
 			m.prettyJson = !m.prettyJson
 			// Re-render content
-			highlighted := m.highlightContent(m.content)
-			m.viewport.SetContent(highlighted)
+			if m.usesChunked {
+				highlighted := m.highlightCachedLines()
+				m.viewport.SetContent(highlighted)
+			} else {
+				highlighted := m.highlightContent(m.content)
+				m.viewport.SetContent(highlighted)
+			}
 			status := "JSON格式化: 关闭"
 			if m.prettyJson {
 				status = "JSON格式化: 开启"
 			}
 			m.statusMsg = status
+			m.updateFooter()
+		case key.Matches(msg, m.keys.ToggleLineNumbers):
+			m.showLineNumbers = !m.showLineNumbers
+			// Re-render content
+			if m.usesChunked {
+				highlighted := m.highlightCachedLines()
+				m.viewport.SetContent(highlighted)
+			} else {
+				highlighted := m.highlightContent(m.content)
+				m.viewport.SetContent(highlighted)
+			}
+			status := "行号显示: 关闭"
+			if m.showLineNumbers {
+				status = "行号显示: 开启"
+			}
+			m.statusMsg = status
+			m.updateFooter()
+		case key.Matches(msg, m.keys.ToggleWrap):
+			m.softWrap = !m.softWrap
+			status := "软换行: 关闭"
+			if m.softWrap {
+				status = "软换行: 开启"
+			}
+			m.statusMsg = status
+			m.updateFooter()
+			// TODO: 实现软换行逻辑
+		case key.Matches(msg, m.keys.NextMatch):
+			if len(m.searchMatches) > 0 {
+				m.currentMatch = (m.currentMatch + 1) % len(m.searchMatches)
+				m.viewport.SetYOffset(m.searchMatches[m.currentMatch])
+				m.statusMsg = fmt.Sprintf("匹配 %d/%d", m.currentMatch+1, len(m.searchMatches))
+				m.updateFooter()
+				// 如果是大文件模式，需要加载匹配行
+				if m.usesChunked && m.needsReload() {
+					cmds = append(cmds, m.loadVisibleLinesCmd())
+				}
+			} else {
+				m.statusMsg = "无匹配项"
+				m.updateFooter()
+			}
+		case key.Matches(msg, m.keys.PrevMatch):
+			if len(m.searchMatches) > 0 {
+				m.currentMatch = (m.currentMatch - 1 + len(m.searchMatches)) % len(m.searchMatches)
+				m.viewport.SetYOffset(m.searchMatches[m.currentMatch])
+				m.statusMsg = fmt.Sprintf("匹配 %d/%d", m.currentMatch+1, len(m.searchMatches))
+				m.updateFooter()
+				// 如果是大文件模式，需要加载匹配行
+				if m.usesChunked && m.needsReload() {
+					cmds = append(cmds, m.loadVisibleLinesCmd())
+				}
+			} else {
+				m.statusMsg = "无匹配项"
+				m.updateFooter()
+			}
 		case key.Matches(msg, m.keys.Down):
+			prevOffset := m.viewport.YOffset
 			m.viewport.LineDown(1)
+			if m.viewport.YOffset != prevOffset && m.needsReload() {
+				cmds = append(cmds, m.loadVisibleLinesCmd())
+			}
 		case key.Matches(msg, m.keys.Up):
+			prevOffset := m.viewport.YOffset
 			m.viewport.LineUp(1)
+			if m.viewport.YOffset != prevOffset && m.needsReload() {
+				cmds = append(cmds, m.loadVisibleLinesCmd())
+			}
 		case key.Matches(msg, m.keys.PageDown):
+			prevOffset := m.viewport.YOffset
 			m.viewport.ViewDown()
+			if m.viewport.YOffset != prevOffset && m.needsReload() {
+				cmds = append(cmds, m.loadVisibleLinesCmd())
+			}
 		case key.Matches(msg, m.keys.PageUp):
+			prevOffset := m.viewport.YOffset
 			m.viewport.ViewUp()
+			if m.viewport.YOffset != prevOffset && m.needsReload() {
+				cmds = append(cmds, m.loadVisibleLinesCmd())
+			}
 		case key.Matches(msg, m.keys.Top):
 			m.viewport.GotoTop()
+			if m.needsReload() {
+				cmds = append(cmds, m.loadVisibleLinesCmd())
+			}
 		case key.Matches(msg, m.keys.Bottom):
 			m.viewport.GotoBottom()
+			if m.needsReload() {
+				cmds = append(cmds, m.loadVisibleLinesCmd())
+			}
 		}
 	case ContentLoadedMsg:
 		if m.history == nil || msg.HistoryID != m.history.ID {
 			break
 		}
+		// 小文件模式
+		m.usesChunked = false
 		m.content = msg.Content // Keep raw content for search/logic
 
 		// Apply Highlighting
@@ -230,6 +498,36 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.viewport.SetContent(highlighted)
 		m.viewport.GotoTop()
 		m.statusMsg = fmt.Sprintf("日志加载完成（%d 字节）", len(msg.Content))
+		m.updateFooter()
+
+	case IndexBuiltMsg:
+		if m.history == nil || msg.HistoryID != m.history.ID {
+			break
+		}
+		// 大文件模式
+		m.usesChunked = true
+		m.chunkedReader = msg.Reader
+		m.totalLines = msg.TotalLines
+		m.indexing = false
+		m.statusMsg = fmt.Sprintf("索引构建完成（%d 行）", m.totalLines)
+		m.updateFooter()
+
+		// 加载初始可见行
+		cmds = append(cmds, m.loadVisibleLinesCmd())
+
+	case LinesLoadedMsg:
+		if !m.usesChunked {
+			break
+		}
+		// 更新缓存
+		m.cachedLines = msg.Lines
+		m.cacheStartLine = msg.StartLine
+		m.cacheEndLine = msg.EndLine
+
+		// 高亮并设置内容
+		highlighted := m.highlightCachedLines()
+		m.viewport.SetContent(highlighted)
+
 	}
 
 	var cmd tea.Cmd
@@ -244,99 +542,104 @@ func (m Model) highlightContent(content string) string {
 	lines := strings.Split(content, "\n")
 	var sb strings.Builder
 
+	// 行号样式
+	lineNumStyle := lipgloss.NewStyle().
+		Foreground(m.theme.TextMuted).
+		Width(6).
+		Align(lipgloss.Right)
+
 	for i, line := range lines {
 		if i > 0 {
 			sb.WriteString("\n")
 		}
 
+		// 添加行号（如果启用）
+		if m.showLineNumbers {
+			lineNumText := lineNumStyle.Render(fmt.Sprintf("%d ", i+1))
+			sb.WriteString(lineNumText)
+			sb.WriteString("  ")
+		}
+
 		// JSON Formatting
 		if m.prettyJson {
-			// Find first '{' and last '}'
-			start := strings.Index(line, "{")
-			end := strings.LastIndex(line, "}")
-
-			if start >= 0 && end > start {
-				jsonPart := line[start : end+1]
-				var buf bytes.Buffer
-				if err := json.Indent(&buf, []byte(jsonPart), "", "  "); err == nil {
-					// Valid JSON, replace part
-					formatted := buf.String()
-					// Indent subsequent lines of JSON to match start pos?
-					// For simplicity, just inject it.
-					// We colorize the JSON part? Maybe later.
-					prefix := line[:start]
-					suffix := line[end+1:]
-
-					// Re-assemble
-					// Note: this makes line multiline. highlight logic below works on line-by-line basis
-					// but we are inside a loop over original lines.
-					// We need to append the formatted block.
-
-					// Style the prefix if needed
+			// 尝试从行中提取JSON
+			prefix, jsonPart, suffix, found := formatter.ExtractJSON(line)
+			if found {
+				// 格式化JSON部分
+				formattedJSON, err := m.formatter.Format(jsonPart)
+				if err == nil {
+					// 成功格式化JSON
 					if len(prefix) > 0 {
-						sb.WriteString(m.styleLine(prefix)) // Recursive style? No, separate helper.
+						// 对前缀应用高亮
+						sb.WriteString(m.highlighter.HighlightLine(prefix, i+1))
 					}
-
-					// Append formatted JSON (lipgloss doesn't indent multiline automatically well without help)
-					sb.WriteString(formatted)
-
+					sb.WriteString(formattedJSON)
 					if len(suffix) > 0 {
 						sb.WriteString(suffix)
 					}
-					continue // Skip standard processing for this line
+					continue
 				}
 			}
 		}
 
-		// Standard Highlighting logic (extracted from previous code)
-		sb.WriteString(m.styleLine(line))
+		// 使用Chroma进行语法高亮
+		highlighted := m.highlighter.HighlightLine(line, i+1)
+		sb.WriteString(highlighted)
 	}
 	return sb.String()
 }
 
-// styleLine applies standard regex/keyword highlighting
-func (m Model) styleLine(line string) string {
-	// Define styles (reused from before, but need to be accessible)
-	// I'll re-instantiate or move them to struct. For now re-instantiate is cheap.
-	timeStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
-	debugStyle := lipgloss.NewStyle().Foreground(m.theme.TextMuted)
-	infoStyle := lipgloss.NewStyle().Foreground(m.theme.Primary)
-	warnStyle := lipgloss.NewStyle().Foreground(m.theme.Warning)
-	errorStyle := lipgloss.NewStyle().Foreground(m.theme.Error).Bold(true)
-	fatalStyle := lipgloss.NewStyle().Background(m.theme.Error).Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+// highlightCachedLines 对缓存的行进行高亮
+func (m Model) highlightCachedLines() string {
+	var sb strings.Builder
 
-	styledLine := line
-	lowerLine := strings.ToLower(line)
+	// 行号样式
+	lineNumStyle := lipgloss.NewStyle().
+		Foreground(m.theme.TextMuted).
+		Width(6).
+		Align(lipgloss.Right)
 
-	// 1. Highlight Timestamp
-	if len(line) > 20 {
-		firstSpace := strings.Index(line, " ")
-		if firstSpace > 5 && firstSpace < 30 {
-			prefix := line[:firstSpace]
-			if strings.ContainsAny(prefix, "0123456789") {
-				if !strings.Contains(lowerLine, "fatal") && !strings.Contains(lowerLine, "error") && !strings.Contains(lowerLine, "err]") && !strings.Contains(lowerLine, "warn") {
-					styledLine = timeStyle.Render(prefix) + styledLine[firstSpace:]
+	for i, line := range m.cachedLines {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+
+		lineNum := m.cacheStartLine + i + 1
+
+		// 添加行号（如果启用）
+		if m.showLineNumbers {
+			lineNumText := lineNumStyle.Render(fmt.Sprintf("%d ", lineNum))
+			sb.WriteString(lineNumText)
+			sb.WriteString("  ")
+		}
+
+		// JSON Formatting
+		if m.prettyJson {
+			// 尝试从行中提取JSON
+			prefix, jsonPart, suffix, found := formatter.ExtractJSON(line)
+			if found {
+				// 格式化JSON部分
+				formattedJSON, err := m.formatter.Format(jsonPart)
+				if err == nil {
+					// 成功格式化JSON
+					if len(prefix) > 0 {
+						// 对前缀应用高亮
+						sb.WriteString(m.highlighter.HighlightLine(prefix, lineNum))
+					}
+					sb.WriteString(formattedJSON)
+					if len(suffix) > 0 {
+						sb.WriteString(suffix)
+					}
+					continue
 				}
 			}
 		}
-	}
 
-	// 2. Highlight Level
-	switch {
-	case strings.Contains(lowerLine, "fatal"):
-		styledLine = fatalStyle.Render(line)
-	case strings.Contains(lowerLine, "error") || strings.Contains(lowerLine, "err]"):
-		styledLine = errorStyle.Render(line)
-	case strings.Contains(lowerLine, "warn"):
-		styledLine = warnStyle.Render(line)
-	case strings.Contains(lowerLine, "info"):
-		styledLine = strings.Replace(styledLine, "INFO", infoStyle.Render("INFO"), 1)
-		styledLine = strings.Replace(styledLine, "info", infoStyle.Render("info"), 1)
-	case strings.Contains(lowerLine, "debug"):
-		styledLine = debugStyle.Render(line)
+		// 使用Chroma进行语法高亮
+		highlighted := m.highlighter.HighlightLine(line, lineNum)
+		sb.WriteString(highlighted)
 	}
-
-	return styledLine
+	return sb.String()
 }
 
 // View 渲染日志。
@@ -350,27 +653,151 @@ func (m Model) View() string {
 	return m.panel.Render(m.viewport.View())
 }
 
-// jumpToQuery 在日志中查找文本。
+// buildKeyHints 构建快捷键提示
+func (m Model) buildKeyHints() string {
+	// 根据窗口宽度调整显示的快捷键
+	hints := []string{}
+
+	// 基础导航（始终显示）
+	hints = append(hints, "j/k:滚动")
+	hints = append(hints, "gg/G:首/尾")
+
+	// 搜索功能
+	if len(m.searchMatches) > 0 {
+		hints = append(hints, "n/N:下/上个匹配")
+	} else {
+		hints = append(hints, "/:搜索")
+	}
+
+	// 根据窗口宽度决定显示更多快捷键
+	if m.width >= 120 {
+		// 宽屏：显示所有快捷键
+		hints = append(hints, "Ctrl+L:行号")
+		hints = append(hints, "Ctrl+J:JSON")
+		hints = append(hints, "Ctrl+W:换行")
+		hints = append(hints, "Esc:返回")
+	} else if m.width >= 90 {
+		// 中等宽度：显示主要功能
+		hints = append(hints, "Ctrl+L:行号")
+		hints = append(hints, "Ctrl+J:JSON")
+		hints = append(hints, "Esc:返回")
+	} else {
+		// 窄屏：只显示基础功能
+		hints = append(hints, "Esc:返回")
+	}
+
+	return strings.Join(hints, " · ")
+}
+
+// updateFooter 更新footer显示
+func (m *Model) updateFooter() {
+	var footer string
+	if m.searching {
+		footer = m.searchInput.View()
+	} else {
+		hints := m.buildKeyHints()
+		if m.statusMsg != "" {
+			footer = common.JoinKeyHelps(m.statusMsg, hints)
+		} else {
+			footer = hints
+		}
+	}
+	m.panel.SetFooter(footer)
+}
+
+// jumpToQuery 在日志中查找文本并存储所有匹配项。
 func (m *Model) jumpToQuery(query string) {
-	if query == "" || m.content == "" {
+	if query == "" {
 		m.statusMsg = "未输入搜索关键词"
+		m.searchMatches = nil
+		m.currentMatch = 0
 		return
 	}
 
-	lines := strings.Split(m.content, "\n")
-	start := m.viewport.YOffset
-	start++
 	lowerQuery := strings.ToLower(query)
-	for idx := 0; idx < len(lines); idx++ {
-		lineIdx := (start + idx) % len(lines)
-		line := strings.ToLower(lines[lineIdx])
-		if strings.Contains(line, lowerQuery) {
-			m.viewport.SetYOffset(lineIdx)
-			m.statusMsg = fmt.Sprintf("匹配行: %d", lineIdx+1)
-			return
+	m.searchMatches = nil
+	m.currentMatch = 0
+
+	// 小文件模式：在完整内容中搜索
+	if !m.usesChunked && m.content != "" {
+		lines := strings.Split(m.content, "\n")
+		for idx, line := range lines {
+			if strings.Contains(strings.ToLower(line), lowerQuery) {
+				m.searchMatches = append(m.searchMatches, idx)
+			}
+		}
+
+		if len(m.searchMatches) > 0 {
+			// 找到从当前位置开始的第一个匹配
+			currentOffset := m.viewport.YOffset
+			for i, lineIdx := range m.searchMatches {
+				if lineIdx >= currentOffset {
+					m.currentMatch = i
+					m.viewport.SetYOffset(lineIdx)
+					m.statusMsg = fmt.Sprintf("找到 %d 个匹配，当前 %d/%d", len(m.searchMatches), i+1, len(m.searchMatches))
+					return
+				}
+			}
+			// 如果所有匹配都在当前位置之前，跳转到第一个匹配
+			m.currentMatch = 0
+			m.viewport.SetYOffset(m.searchMatches[0])
+			m.statusMsg = fmt.Sprintf("找到 %d 个匹配，当前 1/%d", len(m.searchMatches), len(m.searchMatches))
+		} else {
+			m.statusMsg = "未找到匹配"
+		}
+		return
+	}
+
+	// 大文件模式：在整个文件中搜索（需要读取所有行）
+	if m.usesChunked && m.chunkedReader != nil {
+		// 为了搜索功能，我们需要扫描整个文件
+		// 这可能比较耗时，但对于搜索功能是必要的
+		totalLines := m.totalLines
+		batchSize := 1000 // 每次读取1000行
+
+		for start := 0; start < totalLines; start += batchSize {
+			end := start + batchSize - 1
+			if end >= totalLines {
+				end = totalLines - 1
+			}
+
+			lines, err := m.chunkedReader.ReadLines(start, end)
+			if err != nil {
+				m.statusMsg = fmt.Sprintf("搜索出错: %v", err)
+				return
+			}
+
+			for i, line := range lines {
+				if strings.Contains(strings.ToLower(line), lowerQuery) {
+					m.searchMatches = append(m.searchMatches, start+i)
+				}
+			}
+		}
+
+		if len(m.searchMatches) > 0 {
+			// 找到从当前位置开始的第一个匹配
+			currentOffset := m.viewport.YOffset
+			for i, lineIdx := range m.searchMatches {
+				if lineIdx >= currentOffset {
+					m.currentMatch = i
+					m.viewport.SetYOffset(lineIdx)
+					// 需要加载包含该匹配行的内容
+					cmd := m.loadVisibleLinesCmd()
+					if cmd != nil {
+						// 这里无法直接执行cmd，但会在下一次Update中触发加载
+					}
+					m.statusMsg = fmt.Sprintf("找到 %d 个匹配，当前 %d/%d", len(m.searchMatches), i+1, len(m.searchMatches))
+					return
+				}
+			}
+			// 如果所有匹配都在当前位置之前，跳转到第一个匹配
+			m.currentMatch = 0
+			m.viewport.SetYOffset(m.searchMatches[0])
+			m.statusMsg = fmt.Sprintf("找到 %d 个匹配，当前 1/%d", len(m.searchMatches), len(m.searchMatches))
+		} else {
+			m.statusMsg = "未找到匹配"
 		}
 	}
-	m.statusMsg = "未找到匹配"
 }
 
 // JumpToLine jumps to a specific line number (1-based)
@@ -389,15 +816,19 @@ func (m *Model) JumpToLine(line int) {
 }
 
 type keyMap struct {
-	Back       key.Binding
-	Search     key.Binding
-	Down       key.Binding
-	Up         key.Binding
-	PageDown   key.Binding
-	PageUp     key.Binding
-	Top        key.Binding
-	Bottom     key.Binding
-	ToggleJSON key.Binding
+	Back              key.Binding
+	Search            key.Binding
+	Down              key.Binding
+	Up                key.Binding
+	PageDown          key.Binding
+	PageUp            key.Binding
+	Top               key.Binding
+	Bottom            key.Binding
+	ToggleJSON        key.Binding
+	ToggleLineNumbers key.Binding
+	ToggleWrap        key.Binding
+	NextMatch         key.Binding
+	PrevMatch         key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -413,6 +844,22 @@ func newKeyMap() keyMap {
 		ToggleJSON: key.NewBinding(
 			key.WithKeys("ctrl+j"),
 			key.WithHelp("ctrl+j", "JSON格式化"),
+		),
+		ToggleLineNumbers: key.NewBinding(
+			key.WithKeys("ctrl+l"),
+			key.WithHelp("ctrl+l", "切换行号"),
+		),
+		ToggleWrap: key.NewBinding(
+			key.WithKeys("ctrl+w"),
+			key.WithHelp("ctrl+w", "软换行"),
+		),
+		NextMatch: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n", "下一个匹配"),
+		),
+		PrevMatch: key.NewBinding(
+			key.WithKeys("N"),
+			key.WithHelp("N", "上一个匹配"),
 		),
 		Down: key.NewBinding(
 			key.WithKeys("j", "down"),

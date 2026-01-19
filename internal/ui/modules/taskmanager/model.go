@@ -18,6 +18,7 @@ import (
 	"github.com/aliancn/logcmd/internal/tasks/operations"
 	"github.com/aliancn/logcmd/internal/ui/common"
 	"github.com/aliancn/logcmd/internal/ui/components/panel"
+	"github.com/aliancn/logcmd/internal/ui/services/highlighter"
 )
 
 // Model 展示后台任务列表。
@@ -39,6 +40,9 @@ type Model struct {
 	// State for split view
 	selectedID        int
 	logPreviewContent string
+
+	// 服务层
+	highlighter *highlighter.ChromaHighlighter
 }
 
 // tasksLoadedMsg 表示任务列表加载完成。
@@ -85,6 +89,11 @@ func New(manager *tasks.Manager, theme common.Theme, styles common.Styles) Model
 	// 创建Panel布局容器
 	p := panel.NewDefault("", theme, styles)
 
+	// 创建highlighter用于日志预览
+	h := highlighter.NewHighlighter()
+	h.SetFormat(highlighter.FormatAuto)
+	h.SetTheme("monokai")
+
 	return Model{
 		manager:         manager,
 		list:            l,
@@ -94,6 +103,7 @@ func New(manager *tasks.Manager, theme common.Theme, styles common.Styles) Model
 		theme:           theme,
 		styles:          styles,
 		refreshInterval: 5 * time.Second,
+		highlighter:     h,
 	}
 }
 
@@ -398,13 +408,26 @@ func (m Model) loadLogPreviewCmd(task *model.Task) tea.Cmd {
 
 	taskID := task.ID
 	path := task.LogFilePath
+	highlighter := m.highlighter
 
 	return func() tea.Msg {
 		// Read last 1KB or ~20 lines
 		content := readTail(path, 2048) // 2KB buffer
+
+		// 应用语法高亮
+		lines := strings.Split(content, "\n")
+		var sb strings.Builder
+		for i, line := range lines {
+			if i > 0 {
+				sb.WriteString("\n")
+			}
+			highlighted := highlighter.HighlightLine(line, i+1)
+			sb.WriteString(highlighted)
+		}
+
 		return logPreviewMsg{
 			taskID:  taskID,
-			content: content,
+			content: sb.String(),
 		}
 	}
 }

@@ -11,7 +11,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/aliancn/logcmd/internal/ui/common"
+	"github.com/aliancn/logcmd/internal/ui/services/formatter"
+	"github.com/aliancn/logcmd/internal/ui/services/highlighter"
 )
+
+const maxHighlightBytes = 2 * 1024 * 1024 // 超过该大小的文件不执行语法高亮
 
 // LogViewMode 日志查看模式
 //
@@ -33,10 +37,11 @@ type LogViewMode struct {
 	viewport viewport.Model
 
 	// 状态
-	content string
-	loaded  bool
-	error   error
-	active  bool
+	content        string
+	loaded         bool
+	error          error
+	active         bool
+	useHighlighter bool
 
 	// 布局
 	width  int
@@ -48,17 +53,31 @@ type LogViewMode struct {
 
 	// 配置
 	followInterval time.Duration
+
+	// 服务层
+	highlighter *highlighter.ChromaHighlighter
+	formatter   *formatter.JSONFormatter
 }
 
 // NewLogViewMode 创建日志查看模式
 func NewLogViewMode(theme common.Theme, styles common.Styles) *LogViewMode {
 	vp := viewport.New(0, 0)
 
+	// 创建highlighter和formatter
+	h := highlighter.NewHighlighter()
+	h.SetFormat(highlighter.FormatAuto)
+	h.SetTheme("monokai")
+
+	f := formatter.NewJSONFormatter(true)
+
 	return &LogViewMode{
 		viewport:       vp,
 		theme:          theme,
 		styles:         styles,
 		followInterval: time.Second,
+		highlighter:    h,
+		formatter:      f,
+		useHighlighter: true,
 	}
 }
 
@@ -71,28 +90,39 @@ func (m *LogViewMode) Name() string {
 func (m *LogViewMode) Activate() tea.Cmd {
 	m.active = true
 
-	var cmds []tea.Cmd
+	// 如果有文件路径，直接返回加载命令（简化逻辑）
 	if m.filePath != "" {
-		cmds = append(cmds, m.loadFileCmd())
+		// 确保在激活时重置加载状态
+		m.loaded = false
+		m.error = nil
+
+		// 如果需要 follow，后续会通过 Update 处理
+		if m.follow {
+			// 返回批处理命令
+			return tea.Batch(m.loadFileCmd(), m.followTickCmd())
+		}
+
+		// 直接返回加载命令
+		return m.loadFileCmd()
 	}
-	if m.follow {
-		cmds = append(cmds, m.followTickCmd())
-	}
-	if len(cmds) == 0 {
-		return nil
-	}
-	return tea.Batch(cmds...)
+
+	// 如果没有文件路径，标记为加载完成以避免卡在加载状态
+	m.loaded = true
+	m.error = fmt.Errorf("未设置日志文件路径")
+	return nil
 }
 
 // Deactivate 实现 Mode 接口
 func (m *LogViewMode) Deactivate() tea.Cmd {
 	m.active = false
-	// 清理状态
+	// 清理状态（但保留 filePath 以便下次激活）
 	m.content = ""
 	m.loaded = false
 	m.error = nil
 	m.follow = false
 	m.returnData = nil
+	m.useHighlighter = true
+	// 注意：不清理 m.filePath，因为可能需要在下次激活时使用
 	return nil
 }
 
@@ -117,6 +147,7 @@ func (m *LogViewMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 
 	case fileLoadedMsg:
 		m.content = msg.content
+		m.useHighlighter = msg.useHighlighter
 		m.loaded = true
 		m.error = nil
 
@@ -212,17 +243,40 @@ func (m *LogViewMode) SetFile(filePath string, lineNum int, searchQuery string, 
 	m.returnData = returnData
 	m.loaded = false
 	m.error = nil
+	m.useHighlighter = true
 }
 
 // loadFileCmd 加载文件内容
 func (m *LogViewMode) loadFileCmd() tea.Cmd {
+	filePath := m.filePath // 捕获当前文件路径
 	return func() tea.Msg {
-		data, err := os.ReadFile(m.filePath)
+		// 添加防御性检查
+		if filePath == "" {
+			return fileLoadFailedMsg{err: fmt.Errorf("文件路径为空")}
+		}
+
+		// 检查文件是否存在
+		fileInfo, err := os.Stat(filePath)
+		if err != nil {
+			return fileLoadFailedMsg{err: fmt.Errorf("文件不存在或无法访问: %w", err)}
+		}
+
+		// 如果文件太大（超过 100MB），提前警告
+		if fileInfo.Size() > 100*1024*1024 {
+			return fileLoadFailedMsg{err: fmt.Errorf("文件过大（%.1fMB），无法加载", float64(fileInfo.Size())/(1024*1024))}
+		}
+
+		// 读取文件
+		data, err := os.ReadFile(filePath)
 		if err != nil {
 			return fileLoadFailedMsg{err: fmt.Errorf("读取文件失败: %w", err)}
 		}
 
-		return fileLoadedMsg{content: string(data)}
+		// 安全地转换为字符串
+		content := string(data)
+		useHighlighter := len(data) <= maxHighlightBytes
+
+		return fileLoadedMsg{content: content, useHighlighter: useHighlighter}
 	}
 }
 
@@ -266,11 +320,16 @@ func (m *LogViewMode) renderContent() string {
 		// 行号
 		lineNumText := lineNumStyle.Render(fmt.Sprintf("%d ", lineNum))
 
-		// 高亮搜索关键词
+		// 应用语法高亮
 		displayLine := line
+		if m.useHighlighter {
+			displayLine = m.highlighter.HighlightLine(line, lineNum)
+		}
+
+		// 高亮搜索关键词（在语法高亮之后）
 		if m.searchQuery != "" && strings.Contains(strings.ToLower(line), strings.ToLower(m.searchQuery)) {
 			// 简单的关键词高亮（不区分大小写）
-			displayLine = highlightKeyword(line, m.searchQuery, highlightStyle)
+			displayLine = highlightKeyword(displayLine, m.searchQuery, highlightStyle)
 		}
 
 		// 如果是匹配行，整行使用不同背景
@@ -348,6 +407,9 @@ func (m *LogViewMode) renderStatusBar() string {
 	if m.follow {
 		status += " · 实时"
 	}
+	if !m.useHighlighter {
+		status += " · 高亮关闭"
+	}
 
 	statusStyle := lipgloss.NewStyle().
 		Foreground(m.theme.Foreground).
@@ -361,7 +423,20 @@ func (m *LogViewMode) renderStatusBar() string {
 // renderFooter 渲染底部提示
 func (m *LogViewMode) renderFooter() string {
 	modeName := displayModeName(m.returnMode)
-	hints := fmt.Sprintf("↑↓ 滚动 · PgUp/PgDn 翻页 · q/Esc 返回%s", modeName)
+
+	// 根据宽度调整显示的快捷键
+	var hints string
+	if m.width >= 120 {
+		// 宽屏：显示所有快捷键
+		hints = fmt.Sprintf("j/k:滚动 · gg/G:首/尾 · PgUp/Dn:翻页 · q/Esc:返回%s", modeName)
+	} else if m.width >= 90 {
+		// 中等宽度
+		hints = fmt.Sprintf("j/k:滚动 · gg/G:首/尾 · q/Esc:返回%s", modeName)
+	} else {
+		// 窄屏：只显示基础功能
+		hints = fmt.Sprintf("↑↓:滚动 · q/Esc:返回%s", modeName)
+	}
+
 	if m.follow {
 		hints += " · 实时刷新中"
 	}
@@ -393,7 +468,14 @@ func (m *LogViewMode) renderLoading() string {
 		Foreground(m.theme.Primary).
 		Bold(true)
 
-	view += loadingStyle.Render("⏳ 正在加载日志文件...")
+	debugStyle := lipgloss.NewStyle().
+		Foreground(m.theme.TextMuted)
+
+	// 显示加载状态和调试信息
+	view += loadingStyle.Render("⏳ 正在加载日志文件...") + "\n\n"
+	view += debugStyle.Render(fmt.Sprintf("文件路径: %s", m.filePath)) + "\n"
+	view += debugStyle.Render(fmt.Sprintf("激活状态: %v", m.active)) + "\n"
+	view += debugStyle.Render(fmt.Sprintf("加载状态: %v", m.loaded))
 	return view
 }
 
@@ -424,7 +506,8 @@ func (m *LogViewMode) renderError() string {
 // 消息类型
 
 type fileLoadedMsg struct {
-	content string
+	content        string
+	useHighlighter bool
 }
 
 type fileLoadFailedMsg struct {

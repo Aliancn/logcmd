@@ -145,7 +145,14 @@ func (app *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				returnMode = "search"
 			}
 			logViewMode.SetFile(msg.FilePath, msg.LineNum, msg.SearchQuery, returnMode, msg.Follow, msg.ReturnData)
-			// 切换到日志查看模式
+
+			// 如果当前已经是 logview 模式，需要重新激活以加载新文件
+			if app.currentMode == app.modes["logview"] {
+				// 已经在 logview 模式，直接重新激活以加载新文件
+				return app, logViewMode.Activate()
+			}
+
+			// 否则切换到日志查看模式
 			return app, app.SwitchMode("logview")
 		}
 
@@ -216,15 +223,15 @@ func (app *App) SwitchMode(modeName string) tea.Cmd {
 			Height: app.height,
 		}
 		// 立即更新新模式的尺寸
-		newMode, cmd := newMode.Update(sizeMsg)
-		app.currentMode = newMode
+		updatedMode, cmd := app.currentMode.Update(sizeMsg)
+		app.currentMode = updatedMode
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
 
 	// 4. 激活新模式
-	if cmd := newMode.Activate(); cmd != nil {
+	if cmd := app.currentMode.Activate(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 

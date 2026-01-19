@@ -37,7 +37,8 @@ type LogViewMode struct {
 	viewport viewport.Model
 
 	// 状态
-	content        string
+	lines          []string
+	yOffset        int
 	loaded         bool
 	error          error
 	active         bool
@@ -116,7 +117,8 @@ func (m *LogViewMode) Activate() tea.Cmd {
 func (m *LogViewMode) Deactivate() tea.Cmd {
 	m.active = false
 	// 清理状态（但保留 filePath 以便下次激活）
-	m.content = ""
+	m.lines = nil
+	m.yOffset = 0
 	m.loaded = false
 	m.error = nil
 	m.follow = false
@@ -142,24 +144,30 @@ func (m *LogViewMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 		}
 		m.viewport.Width = msg.Width - 2
 		m.viewport.Height = vpHeight
+		
+		if m.loaded {
+			m.updateViewportContent()
+		}
 
 		return m, nil
 
 	case fileLoadedMsg:
-		m.content = msg.content
+		// 分割内容为行，避免每次渲染都分割
+		m.lines = strings.Split(msg.content, "\n")
 		m.useHighlighter = msg.useHighlighter
 		m.loaded = true
 		m.error = nil
 
-		// 设置viewport内容
-		m.viewport.SetContent(m.renderContent())
-
+		// 初始化偏移量
 		if m.follow {
-			m.viewport.GotoBottom()
+			m.gotoBottom()
 		} else if m.lineNum > 0 {
 			m.gotoLine(m.lineNum)
+		} else {
+			m.yOffset = 0
 		}
-
+		
+		m.updateViewportContent()
 		return m, nil
 
 	case fileLoadFailedMsg:
@@ -187,11 +195,32 @@ func (m *LogViewMode) Update(msg tea.Msg) (Mode, tea.Cmd) {
 					Data:     m.returnData,
 				}
 			}
+		// 滚动控制
+		case "j", "down":
+			m.scrollDown(1)
+		case "k", "up":
+			m.scrollUp(1)
+		case "pgdown", " ":
+			m.scrollDown(m.viewport.Height)
+		case "pgup", "b":
+			m.scrollUp(m.viewport.Height)
+		case "g", "home":
+			m.gotoTop()
+		case "G", "end":
+			m.gotoBottom()
 		}
 	}
 
-	// 更新viewport（处理滚动）
-	m.viewport, cmd = m.viewport.Update(msg)
+	// 我们自己接管了滚动逻辑，不再调用 m.viewport.Update(msg) 处理 KeyMsg
+	// 但仍然需要调用它来处理其他消息（如鼠标事件等，如果有的话）
+	// 不过为了避免冲突，这里我们只在非KeyMsg时调用，或者干脆不调用，
+	// 因为我们每次 Update 都手动 SetContent 了。
+	// 为了保持 resize 等内部逻辑（虽然我们手动处理了 resize），还是保留它，但这里 KeyMsg 已经被拦截。
+	// m.viewport, cmd = m.viewport.Update(msg) 
+	
+	// 由于我们手动设置 Content 为可见区域，viewport 内部的 offset 应该始终为 0
+	// 任何时候都不需要 viewport 自己去滚动
+	
 	return m, cmd
 }
 
@@ -244,6 +273,8 @@ func (m *LogViewMode) SetFile(filePath string, lineNum int, searchQuery string, 
 	m.loaded = false
 	m.error = nil
 	m.useHighlighter = true
+	m.lines = nil
+	m.yOffset = 0
 }
 
 // loadFileCmd 加载文件内容
@@ -290,13 +321,47 @@ func (m *LogViewMode) followTickCmd() tea.Cmd {
 	})
 }
 
-// renderContent 渲染文件内容（带行号和高亮）
-func (m *LogViewMode) renderContent() string {
-	if m.content == "" {
-		return "(空文件)"
+// updateViewportContent 计算可见区域并渲染
+func (m *LogViewMode) updateViewportContent() {
+	if len(m.lines) == 0 {
+		m.viewport.SetContent("(空文件)")
+		return
 	}
 
-	lines := strings.Split(m.content, "\n")
+	// 确保 viewport 高度已设置
+	if m.viewport.Height == 0 {
+		return
+	}
+
+	// 限制 yOffset 范围
+	maxOffset := len(m.lines) - m.viewport.Height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	
+	if m.yOffset > maxOffset {
+		m.yOffset = maxOffset
+	}
+	if m.yOffset < 0 {
+		m.yOffset = 0
+	}
+
+	// 计算可见行
+	end := m.yOffset + m.viewport.Height
+	if end > len(m.lines) {
+		end = len(m.lines)
+	}
+	
+	visibleLines := m.lines[m.yOffset:end]
+	
+	// 渲染可见行
+	renderedContent := m.renderLines(visibleLines, m.yOffset+1)
+	m.viewport.SetContent(renderedContent)
+	m.viewport.SetYOffset(0) // 总是重置为0，因为我们手动控制了内容
+}
+
+// renderLines 渲染指定的行片段
+func (m *LogViewMode) renderLines(lines []string, startLineNum int) string {
 	var result strings.Builder
 
 	// 高亮样式
@@ -314,7 +379,7 @@ func (m *LogViewMode) renderContent() string {
 		Align(lipgloss.Right)
 
 	for i, line := range lines {
-		lineNum := i + 1
+		lineNum := startLineNum + i
 		isMatchLine := lineNum == m.lineNum
 
 		// 行号
@@ -323,6 +388,9 @@ func (m *LogViewMode) renderContent() string {
 		// 应用语法高亮
 		displayLine := line
 		if m.useHighlighter {
+			// 注意：Highlighter 可能需要完整行来正确解析上下文，
+			// 但 Chroma 的 HighlightLine 通常可以处理单行（尽管某些多行语法可能受影响）。
+			// 为了性能，这是必要的妥协。
 			displayLine = m.highlighter.HighlightLine(line, lineNum)
 		}
 
@@ -342,6 +410,58 @@ func (m *LogViewMode) renderContent() string {
 	}
 
 	return result.String()
+}
+
+// 滚动辅助函数
+
+func (m *LogViewMode) scrollDown(lines int) {
+	if len(m.lines) == 0 {
+		return
+	}
+	m.yOffset += lines
+	m.updateViewportContent()
+}
+
+func (m *LogViewMode) scrollUp(lines int) {
+	m.yOffset -= lines
+	m.updateViewportContent()
+}
+
+func (m *LogViewMode) gotoTop() {
+	m.yOffset = 0
+	m.updateViewportContent()
+}
+
+func (m *LogViewMode) gotoBottom() {
+	if len(m.lines) == 0 {
+		return
+	}
+	m.yOffset = len(m.lines) - m.viewport.Height
+	if m.yOffset < 0 {
+		m.yOffset = 0
+	}
+	m.updateViewportContent()
+}
+
+// gotoLine 跳转到指定行
+func (m *LogViewMode) gotoLine(lineNum int) {
+	if lineNum <= 0 {
+		return
+	}
+
+	if lineNum > len(m.lines) {
+		lineNum = len(m.lines)
+	}
+
+	// 计算目标行的偏移
+	// 让目标行显示在viewport的中间位置
+	targetOffset := lineNum - m.viewport.Height/2
+	if targetOffset < 0 {
+		targetOffset = 0
+	}
+
+	m.yOffset = targetOffset
+	m.updateViewportContent()
 }
 
 // highlightKeyword 高亮关键词
@@ -370,27 +490,6 @@ func highlightKeyword(text, keyword string, style lipgloss.Style) string {
 	}
 
 	return result.String()
-}
-
-// gotoLine 跳转到指定行
-func (m *LogViewMode) gotoLine(lineNum int) {
-	if lineNum <= 0 {
-		return
-	}
-
-	lines := strings.Split(m.content, "\n")
-	if lineNum > len(lines) {
-		lineNum = len(lines)
-	}
-
-	// 计算目标行的偏移（每行包含行号）
-	// 让目标行显示在viewport的中间位置
-	targetOffset := lineNum - m.viewport.Height/2
-	if targetOffset < 0 {
-		targetOffset = 0
-	}
-
-	m.viewport.SetYOffset(targetOffset)
 }
 
 // renderStatusBar 渲染状态栏

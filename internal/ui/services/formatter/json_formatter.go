@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/tidwall/pretty"
 )
 
@@ -11,24 +12,38 @@ import (
 type JSONFormatter struct {
 	colorful bool
 	indent   int
+	cache    *lru.Cache[string, string] // JSON原文 -> 格式化结果
 }
 
 // NewJSONFormatter 创建新的JSON格式化器
 func NewJSONFormatter(colorful bool) *JSONFormatter {
+	cache, _ := lru.New[string, string](500) // 缓存500条JSON
 	return &JSONFormatter{
 		colorful: colorful,
 		indent:   2,
+		cache:    cache,
 	}
 }
 
 // SetColorful 设置是否使用彩色输出
 func (f *JSONFormatter) SetColorful(colorful bool) {
 	f.colorful = colorful
+	// 切换颜色模式时清除缓存，因为缓存的结果依赖colorful设置
+	f.cache.Purge()
 }
 
 // SetIndent 设置缩进空格数
 func (f *JSONFormatter) SetIndent(indent int) {
-	f.indent = indent
+	if f.indent != indent {
+		f.indent = indent
+		// 缩进改变时清除缓存
+		f.cache.Purge()
+	}
+}
+
+// ClearCache 清除格式化缓存
+func (f *JSONFormatter) ClearCache() {
+	f.cache.Purge()
 }
 
 // Format 格式化JSON字符串
@@ -36,6 +51,11 @@ func (f *JSONFormatter) Format(jsonStr string) (string, error) {
 	// 验证JSON有效性
 	if !json.Valid([]byte(jsonStr)) {
 		return jsonStr, nil // 如果不是有效JSON，返回原文
+	}
+
+	// 检查缓存
+	if cached, ok := f.cache.Get(jsonStr); ok {
+		return cached, nil
 	}
 
 	// 使用pretty进行格式化
@@ -57,12 +77,21 @@ func (f *JSONFormatter) Format(jsonStr string) (string, error) {
 		})
 	}
 
-	return string(result), nil
+	formatted := string(result)
+	// 缓存结果
+	f.cache.Add(jsonStr, formatted)
+	return formatted, nil
 }
 
 // ExtractJSON 从日志行中提取JSON部分
 // 返回值: prefix(JSON前的文本), json(JSON内容), suffix(JSON后的文本), found(是否找到JSON)
 func ExtractJSON(line string) (prefix, jsonPart, suffix string, found bool) {
+	// 快速失败：如果行中既没有 { 也没有 [，直接返回
+	// 这个优化可以避免对纯文本日志进行昂贵的遍历操作
+	if !strings.ContainsAny(line, "{[") {
+		return "", "", "", false
+	}
+
 	// 查找JSON对象 {...}
 	startObj := strings.Index(line, "{")
 	if startObj != -1 {

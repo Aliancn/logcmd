@@ -11,6 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/cespare/xxhash/v2"
+	lru "github.com/hashicorp/golang-lru/v2"
 
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/ui/common"
@@ -40,7 +42,9 @@ type Model struct {
 	goingToLine bool
 
 	statusMsg   string
+	err         error
 	prettyJson  bool // JSON 格式化模式
+	loading     bool // 是否正在加载
 
 	// 服务层
 	highlighter *highlighter.ChromaHighlighter
@@ -62,14 +66,36 @@ type Model struct {
 	softWrap        bool // 是否软换行
 
 	// 搜索增强
-	searchMatches []int // 所有匹配行的行号
-	currentMatch  int   // 当前匹配项索引
+	searchMatches    []int  // 所有匹配行的行号
+	currentMatch     int    // 当前匹配项索引
+	searchQuery      string // 当前搜索关键词
+	highlightMatches bool   // 是否高亮匹配（默认true）
+
+	// 性能优化：高亮缓存
+	highlightCache *lru.Cache[int, string] // 行号 -> 高亮后的内容（LRU限制大小）
+
+	// 渲染优化
+	lastRenderedHash uint64 // 上次渲染内容的hash
+	needsFullRender  bool   // 是否需要完整重渲染
+
+	// 惰性高亮优化
+	visibleStart  int  // viewport可见起始行
+	visibleEnd    int  // viewport可见结束行
+	highlightLazy bool // 是否启用惰性高亮（默认true）
 }
 
 // ContentLoadedMsg 表示日志内容已加载。
 type ContentLoadedMsg struct {
 	HistoryID int
 	Content   string
+}
+
+// PartialContentLoadedMsg 表示部分日志内容已快速加载（用于首屏显示）
+type PartialContentLoadedMsg struct {
+	HistoryID      int
+	Lines          []string
+	IsFullFile     bool // 是否为完整文件（小文件）
+	Reader         *reader.ChunkedReader // 大文件时传递reader
 }
 
 // IndexBuiltMsg 表示文件索引已构建完成
@@ -127,19 +153,25 @@ func New(theme common.Theme, styles common.Styles) Model {
 
 	f := formatter.NewJSONFormatter(true) // 启用彩色输出
 
+	// 初始化LRU缓存（限制2000行）
+	highlightCache, _ := lru.New[int, string](2000)
+
 	return Model{
-		viewport:        vp,
-		panel:           p,
-		theme:           theme,
-		styles:          styles,
-		keys:            newKeyMap(),
-		searchInput:     input,
-		gotoInput:       gInput,
-		highlighter:     h,
-		formatter:       f,
-		bufferSize:      100, // 默认预加载100行
-		showLineNumbers: true, // 默认显示行号
-		softWrap:        false, // 默认不换行
+		viewport:         vp,
+		panel:            p,
+		theme:            theme,
+		styles:           styles,
+		keys:             newKeyMap(),
+		searchInput:      input,
+		gotoInput:        gInput,
+		highlighter:      h,
+		formatter:        f,
+		bufferSize:       100,    // 默认预加载100行
+		showLineNumbers:  true,   // 默认显示行号
+		softWrap:         false,  // 默认不换行
+		highlightCache:   highlightCache,
+		highlightLazy:    true,   // 默认启用惰性高亮
+		highlightMatches: true,   // 默认启用搜索高亮
 	}
 }
 
@@ -157,17 +189,21 @@ func (m *Model) SetFile(path string) {
 	}
 
 	m.history = nil
-	m.filePath = path
-	m.content = ""
-	m.viewport.SetContent("")
+	m.filePath = path // 设置文件路径
 	m.viewport.GotoTop()
-	m.statusMsg = ""
+	m.statusMsg = "加载中..."
+	m.loading = true
 	m.usesChunked = false
 	m.cachedLines = nil
 	m.cacheStartLine = 0
 	m.cacheEndLine = 0
 	m.totalLines = 0
 	m.indexing = false
+	m.highlightCache.Purge() // 清除高亮缓存
+
+	// 重置渲染状态，确保新内容一定会被渲染
+	m.lastRenderedHash = 0
+	m.needsFullRender = true
 }
 
 // SetHistory 指定要查看的历史记录。
@@ -179,16 +215,24 @@ func (m *Model) SetHistory(history *model.CommandHistory) {
 	}
 
 	m.history = history
+	m.filePath = "" // 清除文件路径
+	m.err = nil
 	m.content = ""
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
-	m.statusMsg = ""
+	m.statusMsg = "加载中..."
+	m.loading = true
 	m.usesChunked = false
 	m.cachedLines = nil
 	m.cacheStartLine = 0
 	m.cacheEndLine = 0
 	m.totalLines = 0
 	m.indexing = false
+	m.highlightCache.Purge() // 清除高亮缓存
+
+	// 重置渲染状态，确保新内容一定会被渲染
+	m.lastRenderedHash = 0
+	m.needsFullRender = true
 }
 
 // Reset 清理状态。
@@ -201,15 +245,22 @@ func (m *Model) Reset() {
 
 	m.history = nil
 	m.filePath = ""
+	m.err = nil
 	m.content = ""
 	m.viewport.SetContent("")
 	m.statusMsg = ""
+	m.loading = false
 	m.usesChunked = false
 	m.cachedLines = nil
 	m.cacheStartLine = 0
 	m.cacheEndLine = 0
 	m.totalLines = 0
 	m.indexing = false
+	m.highlightCache.Purge() // 清除高亮缓存
+
+	// 重置渲染状态
+	m.lastRenderedHash = 0
+	m.needsFullRender = true
 }
 
 // SetSize 调整 viewport 大小。
@@ -298,11 +349,15 @@ func (m Model) LoadContentCmd() tea.Cmd {
 			return common.ErrorMsg{Err: fmt.Errorf("获取文件信息失败: %w", err)}
 		}
 
-		// 判断是否需要使用分块读取（大于10MB）
-		const chunkThreshold = 10 * 1024 * 1024 // 10MB
+		// 判断是否需要使用分块读取
+		// 注意：这里使用较小的阈值（2MB）是因为：
+		// 1. 避免对大行数文件（如2万行日志）进行全量语法高亮导致卡顿
+		// 2. 分块模式有缓存优化，性能更好
+		// 3. 渐进式加载提供更好的用户体验
+		const chunkThreshold = 2 * 1024 * 1024 // 2MB
 
 		if fileInfo.Size() > chunkThreshold {
-			// 大文件：使用分块读取
+			// 大文件：使用渐进式加载策略
 			chunkedReader, err := reader.NewChunkedReader(path, reader.DefaultConfig())
 			if err != nil {
 				// 分块读取失败，降级到全量读取
@@ -316,11 +371,12 @@ func (m Model) LoadContentCmd() tea.Cmd {
 				}
 			}
 
-			// 异步构建索引
-			err = chunkedReader.BuildIndex()
+			// 快速读取文件头部（1000行）用于首屏显示
+			const quickLoadLines = 1000
+			lines, err := chunkedReader.QuickReadLines(quickLoadLines)
 			if err != nil {
 				chunkedReader.Close()
-				// 索引构建失败，降级到全量读取
+				// 快速读取失败，降级到全量读取
 				data, readErr := os.ReadFile(path)
 				if readErr != nil {
 					return common.ErrorMsg{Err: fmt.Errorf("读取日志失败: %w", readErr)}
@@ -331,10 +387,12 @@ func (m Model) LoadContentCmd() tea.Cmd {
 				}
 			}
 
-			return IndexBuiltMsg{
+			// 返回部分内容，稍后会在后台构建索引
+			return PartialContentLoadedMsg{
 				HistoryID:  historyID,
+				Lines:      lines,
+				IsFullFile: false,
 				Reader:     chunkedReader,
-				TotalLines: chunkedReader.TotalLines(),
 			}
 		}
 
@@ -386,6 +444,34 @@ func (m Model) loadVisibleLinesCmd() tea.Cmd {
 	}
 }
 
+// buildIndexCmd 后台构建索引
+func (m Model) buildIndexCmd() tea.Cmd {
+	if m.chunkedReader == nil {
+		return nil
+	}
+
+	var historyID int
+	if m.history != nil {
+		historyID = m.history.ID
+	}
+
+	reader := m.chunkedReader
+
+	return func() tea.Msg {
+		// 在后台构建索引
+		err := reader.BuildIndex()
+		if err != nil {
+			return common.ErrorMsg{Err: fmt.Errorf("索引构建失败: %w", err)}
+		}
+
+		return IndexBuiltMsg{
+			HistoryID:  historyID,
+			Reader:     reader,
+			TotalLines: reader.TotalLines(),
+		}
+	}
+}
+
 // needsReload 检查是否需要重新加载行
 func (m Model) needsReload() bool {
 	if !m.usesChunked {
@@ -407,6 +493,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.SetSize(msg.Width, msg.Height)
+	case common.ErrorMsg:
+		m.loading = false
+		m.err = msg.Err
+		m.statusMsg = fmt.Sprintf("错误: %v", msg.Err)
+		m.updateFooter()
 	case tea.KeyMsg:
 		if m.searching {
 			var cmd tea.Cmd
@@ -475,13 +566,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		case key.Matches(msg, m.keys.ToggleJSON):
 			m.prettyJson = !m.prettyJson
-			// Re-render content
-			if m.usesChunked {
+			// 清除高亮缓存，因为格式化选项改变了
+			m.highlightCache.Purge()
+			m.needsFullRender = true // 强制重新渲染
+			// Re-render content (统一使用惰性高亮路径)
+			if len(m.cachedLines) > 0 {
 				highlighted := m.highlightCachedLines()
-				m.viewport.SetContent(highlighted)
-			} else {
-				highlighted := m.highlightContent(m.content)
-				m.viewport.SetContent(highlighted)
+				hash := xxhash.Sum64String(highlighted)
+				if m.shouldRender(hash) {
+					m.viewport.SetContent(highlighted)
+				}
 			}
 			status := "JSON格式化: 关闭"
 			if m.prettyJson {
@@ -491,13 +585,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.updateFooter()
 		case key.Matches(msg, m.keys.ToggleLineNumbers):
 			m.showLineNumbers = !m.showLineNumbers
-			// Re-render content
-			if m.usesChunked {
+			// 清除高亮缓存，因为行号显示选项改变了
+			m.highlightCache.Purge()
+			m.needsFullRender = true // 强制重新渲染
+			// Re-render content (统一使用惰性高亮路径)
+			if len(m.cachedLines) > 0 {
 				highlighted := m.highlightCachedLines()
-				m.viewport.SetContent(highlighted)
-			} else {
-				highlighted := m.highlightContent(m.content)
-				m.viewport.SetContent(highlighted)
+				hash := xxhash.Sum64String(highlighted)
+				if m.shouldRender(hash) {
+					m.viewport.SetContent(highlighted)
+				}
 			}
 			status := "行号显示: 关闭"
 			if m.showLineNumbers {
@@ -507,13 +604,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.updateFooter()
 		case key.Matches(msg, m.keys.ToggleWrap):
 			m.softWrap = !m.softWrap
+			// 清除高亮缓存，因为换行会改变显示
+			m.highlightCache.Purge()
+			m.needsFullRender = true // 强制重新渲染
+			// Re-render content (统一使用惰性高亮路径)
+			if len(m.cachedLines) > 0 {
+				highlighted := m.highlightCachedLines()
+				hash := xxhash.Sum64String(highlighted)
+				if m.shouldRender(hash) {
+					m.viewport.SetContent(highlighted)
+				}
+			}
 			status := "软换行: 关闭"
 			if m.softWrap {
 				status = "软换行: 开启"
 			}
 			m.statusMsg = status
 			m.updateFooter()
-			// TODO: 实现软换行逻辑
 		case key.Matches(msg, m.keys.NextMatch):
 			if len(m.searchMatches) > 0 {
 				m.currentMatch = (m.currentMatch + 1) % len(m.searchMatches)
@@ -581,22 +688,81 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if (m.history != nil && msg.HistoryID != m.history.ID) && (m.filePath != "" && msg.HistoryID != 0) {
 			break
 		}
-		// 小文件模式
+		m.loading = false
+		// 小文件也使用惰性高亮路径（性能优化）
 		m.usesChunked = false
 		m.content = msg.Content // Keep raw content for search/logic
 
-		// Apply Highlighting
-		highlighted := m.highlightContent(msg.Content)
+		// 将内容分割为行，使用惰性高亮机制
+		lines := strings.Split(msg.Content, "\n")
+		m.cachedLines = lines
+		m.cacheStartLine = 0
+		m.cacheEndLine = len(lines) - 1
+		m.totalLines = len(lines)
 
-		m.viewport.SetContent(highlighted)
+		// 使用惰性高亮（只高亮可见区域 + 享受LRU缓存）
+		highlighted := m.highlightCachedLines()
+		hash := xxhash.Sum64String(highlighted)
+		if m.shouldRender(hash) {
+			m.viewport.SetContent(highlighted)
+		}
 		m.viewport.GotoTop()
-		m.statusMsg = fmt.Sprintf("日志加载完成（%d 字节）", len(msg.Content))
+		m.statusMsg = fmt.Sprintf("日志加载完成（%d 行）", len(lines))
+		m.updateFooter()
+
+	case PartialContentLoadedMsg:
+		if (m.history != nil && msg.HistoryID != m.history.ID) && (m.filePath != "" && msg.HistoryID != 0) {
+			break
+		}
+		m.loading = false
+
+		if msg.IsFullFile {
+			// 小文件，也使用惰性高亮路径（性能优化）
+			m.usesChunked = false
+			m.content = strings.Join(msg.Lines, "\n")
+
+			// 使用惰性高亮机制
+			m.cachedLines = msg.Lines
+			m.cacheStartLine = 0
+			m.cacheEndLine = len(msg.Lines) - 1
+			m.totalLines = len(msg.Lines)
+
+			highlighted := m.highlightCachedLines()
+			hash := xxhash.Sum64String(highlighted)
+			if m.shouldRender(hash) {
+				m.viewport.SetContent(highlighted)
+			}
+			m.viewport.GotoTop()
+			m.statusMsg = fmt.Sprintf("日志加载完成（%d 行）", len(msg.Lines))
+		} else {
+			// 大文件，显示部分内容，准备后台索引
+			m.usesChunked = true
+			m.chunkedReader = msg.Reader
+			m.cachedLines = msg.Lines
+			m.cacheStartLine = 0
+			m.cacheEndLine = len(msg.Lines) - 1
+			m.totalLines = len(msg.Lines) // 临时值，索引完成后会更新
+			m.indexing = true
+
+			// 立即显示已加载的内容
+			highlighted := m.highlightCachedLines()
+			hash := xxhash.Sum64String(highlighted)
+			if m.shouldRender(hash) {
+				m.viewport.SetContent(highlighted)
+			}
+			m.viewport.GotoTop()
+			m.statusMsg = fmt.Sprintf("快速加载完成（前 %d 行），正在建立索引...", len(msg.Lines))
+
+			// 启动后台索引构建
+			cmds = append(cmds, m.buildIndexCmd())
+		}
 		m.updateFooter()
 
 	case IndexBuiltMsg:
 		if (m.history != nil && msg.HistoryID != m.history.ID) && (m.filePath != "" && msg.HistoryID != 0) {
 			break
 		}
+		m.loading = false
 		// 大文件模式
 		m.usesChunked = true
 		m.chunkedReader = msg.Reader
@@ -619,7 +785,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 		// 高亮并设置内容
 		highlighted := m.highlightCachedLines()
-		m.viewport.SetContent(highlighted)
+		hash := xxhash.Sum64String(highlighted)
+		if m.shouldRender(hash) {
+			m.viewport.SetContent(highlighted)
+		}
 
 	}
 
@@ -630,61 +799,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// highlightContent applies syntax highlighting to log content
-func (m Model) highlightContent(content string) string {
-	lines := strings.Split(content, "\n")
+// highlightCachedLines 对缓存的行进行高亮（带缓存优化和惰性高亮）
+// 注：原 highlightContent 函数已废弃，统一使用此函数以享受性能优化
+func (m *Model) highlightCachedLines() string {
 	var sb strings.Builder
 
-	// 行号样式
-	lineNumStyle := lipgloss.NewStyle().
-		Foreground(m.theme.TextMuted).
-		Width(6).
-		Align(lipgloss.Right)
-
-	for i, line := range lines {
-		if i > 0 {
-			sb.WriteString("\n")
-		}
-
-		// 添加行号（如果启用）
-		if m.showLineNumbers {
-			lineNumText := lineNumStyle.Render(fmt.Sprintf("%d ", i+1))
-			sb.WriteString(lineNumText)
-			sb.WriteString("  ")
-		}
-
-		// JSON Formatting
-		if m.prettyJson {
-			// 尝试从行中提取JSON
-			prefix, jsonPart, suffix, found := formatter.ExtractJSON(line)
-			if found {
-				// 格式化JSON部分
-				formattedJSON, err := m.formatter.Format(jsonPart)
-				if err == nil {
-					// 成功格式化JSON
-					if len(prefix) > 0 {
-						// 对前缀应用高亮
-						sb.WriteString(m.highlighter.HighlightLine(prefix, i+1))
-					}
-					sb.WriteString(formattedJSON)
-					if len(suffix) > 0 {
-						sb.WriteString(suffix)
-					}
-					continue
-				}
-			}
-		}
-
-		// 使用Chroma进行语法高亮
-		highlighted := m.highlighter.HighlightLine(line, i+1)
-		sb.WriteString(highlighted)
-	}
-	return sb.String()
-}
-
-// highlightCachedLines 对缓存的行进行高亮
-func (m Model) highlightCachedLines() string {
-	var sb strings.Builder
+	// 计算可见范围
+	m.visibleStart = m.viewport.YOffset
+	m.visibleEnd = m.visibleStart + m.viewport.Height
+	lazyBuffer := 20 // 可见区域前后缓冲行数
 
 	// 行号样式
 	lineNumStyle := lipgloss.NewStyle().
@@ -706,6 +829,28 @@ func (m Model) highlightCachedLines() string {
 			sb.WriteString("  ")
 		}
 
+		// 判断是否需要高亮（惰性高亮优化）
+		needsHighlight := !m.highlightLazy ||
+			(lineNum >= m.visibleStart-lazyBuffer &&
+				lineNum <= m.visibleEnd+lazyBuffer)
+
+		if !needsHighlight {
+			// 不在可见范围，直接显示原文
+			sb.WriteString(line)
+			continue
+		}
+
+		// 检查缓存
+		cacheKey := lineNum
+		if cached, ok := m.highlightCache.Get(cacheKey); ok {
+			// 使用缓存的高亮结果
+			sb.WriteString(cached)
+			continue
+		}
+
+		// 缓存未命中，需要高亮
+		var highlighted string
+
 		// JSON Formatting
 		if m.prettyJson {
 			// 尝试从行中提取JSON
@@ -715,29 +860,196 @@ func (m Model) highlightCachedLines() string {
 				formattedJSON, err := m.formatter.Format(jsonPart)
 				if err == nil {
 					// 成功格式化JSON
+					var jsonBuilder strings.Builder
 					if len(prefix) > 0 {
 						// 对前缀应用高亮
-						sb.WriteString(m.highlighter.HighlightLine(prefix, lineNum))
+						jsonBuilder.WriteString(m.highlighter.HighlightLine(prefix, lineNum))
 					}
-					sb.WriteString(formattedJSON)
+					jsonBuilder.WriteString(formattedJSON)
 					if len(suffix) > 0 {
-						sb.WriteString(suffix)
+						jsonBuilder.WriteString(suffix)
 					}
+					highlighted = jsonBuilder.String()
+					// 缓存并写入
+					m.highlightCache.Add(cacheKey, highlighted)
+					sb.WriteString(highlighted)
 					continue
 				}
 			}
 		}
 
 		// 使用Chroma进行语法高亮
-		highlighted := m.highlighter.HighlightLine(line, lineNum)
-		sb.WriteString(highlighted)
+		highlighted = m.highlighter.HighlightLine(line, lineNum)
+
+		// 如果启用搜索高亮且有搜索关键词，添加搜索匹配高亮
+		if m.highlightMatches && m.searchQuery != "" {
+			if strings.Contains(strings.ToLower(line), m.searchQuery) {
+				highlighted = m.highlightSearchMatches(highlighted, m.searchQuery)
+			}
+		}
+
+		// 缓存高亮结果
+		m.highlightCache.Add(cacheKey, highlighted)
+
+		// 应用软换行（如果启用）
+		if m.softWrap && m.viewport.Width > 0 {
+			// 计算可用宽度（减去行号宽度）
+			availableWidth := m.viewport.Width
+			if m.showLineNumbers {
+				availableWidth -= 10 // 行号占用约10个字符
+			}
+
+			wrappedLines := m.wrapLine(highlighted, availableWidth)
+			for j, wrappedLine := range wrappedLines {
+				if j > 0 {
+					sb.WriteString("\n")
+					// 后续行添加缩进对齐
+					if m.showLineNumbers {
+						sb.WriteString("          ") // 10个空格对齐
+					}
+				}
+				sb.WriteString(wrappedLine)
+			}
+		} else {
+			sb.WriteString(highlighted)
+		}
 	}
 	return sb.String()
 }
 
+// wrapLine 将长行按照指定宽度进行换行
+// 在空格处断行，保持单词完整性
+func (m *Model) wrapLine(line string, width int) []string {
+	if width <= 0 {
+		return []string{line}
+	}
+
+	// 移除ANSI转义序列计算可见长度
+	visibleLen := lipgloss.Width(line)
+	if visibleLen <= width {
+		return []string{line}
+	}
+
+	// 简单实现：按空格分词
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return []string{line}
+	}
+
+	var wrapped []string
+	var currentLine strings.Builder
+	currentWidth := 0
+
+	for _, word := range words {
+		wordWidth := lipgloss.Width(word)
+
+		// 如果单词本身超过宽度，直接作为一行
+		if wordWidth > width {
+			if currentLine.Len() > 0 {
+				wrapped = append(wrapped, currentLine.String())
+				currentLine.Reset()
+				currentWidth = 0
+			}
+			wrapped = append(wrapped, word)
+			continue
+		}
+
+		// 计算添加这个词后的总宽度（包括空格）
+		needWidth := wordWidth
+		if currentWidth > 0 {
+			needWidth += 1 // 空格
+		}
+
+		// 如果会超过宽度，换行
+		if currentWidth+needWidth > width {
+			wrapped = append(wrapped, currentLine.String())
+			currentLine.Reset()
+			currentLine.WriteString(word)
+			currentWidth = wordWidth
+		} else {
+			// 添加到当前行
+			if currentWidth > 0 {
+				currentLine.WriteString(" ")
+			}
+			currentLine.WriteString(word)
+			currentWidth += needWidth
+		}
+	}
+
+	// 添加最后一行
+	if currentLine.Len() > 0 {
+		wrapped = append(wrapped, currentLine.String())
+	}
+
+	if len(wrapped) == 0 {
+		return []string{line}
+	}
+
+	return wrapped
+}
+
+// highlightSearchMatches 为搜索匹配添加背景高亮
+// 注意：text可能已经包含ANSI转义序列，需要小心处理
+func (m *Model) highlightSearchMatches(text, query string) string {
+	if query == "" {
+		return text
+	}
+
+	matchStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("226")).
+		Foreground(lipgloss.Color("0"))
+
+	lowerText := strings.ToLower(text)
+	lowerQuery := strings.ToLower(query)
+
+	var builder strings.Builder
+	lastIndex := 0
+	searchStart := 0
+	found := false
+
+	for {
+		pos := strings.Index(lowerText[searchStart:], lowerQuery)
+		if pos == -1 {
+			break
+		}
+
+		found = true
+		matchStart := searchStart + pos
+		matchEnd := matchStart + len(query)
+		builder.WriteString(text[lastIndex:matchStart])
+		builder.WriteString(matchStyle.Render(text[matchStart:matchEnd]))
+		lastIndex = matchEnd
+		searchStart = matchEnd
+	}
+
+	if !found {
+		return text
+	}
+
+	builder.WriteString(text[lastIndex:])
+	return builder.String()
+}
+
+// shouldRender 检查是否需要重新渲染viewport内容
+// 通过比较内容hash来避免不必要的SetContent调用
+func (m *Model) shouldRender(newHash uint64) bool {
+	if m.needsFullRender || newHash != m.lastRenderedHash {
+		m.lastRenderedHash = newHash
+		m.needsFullRender = false
+		return true
+	}
+	return false
+}
+
 // View 渲染日志。
 func (m Model) View() string {
-	if m.history == nil {
+	if m.err != nil {
+		return m.panel.RenderEmpty(fmt.Sprintf("无法加载日志:\n%v", m.err))
+	}
+	if m.loading {
+		return m.panel.RenderEmpty("正在加载日志，请稍候...\n(大文件正在建立索引)")
+	}
+	if m.history == nil && m.filePath == "" {
 		return m.panel.RenderEmpty("选择一条历史记录查看日志")
 	}
 
@@ -806,10 +1118,12 @@ func (m *Model) jumpToQuery(query string) {
 		m.statusMsg = "未输入搜索关键词"
 		m.searchMatches = nil
 		m.currentMatch = 0
+		m.searchQuery = "" // 清除搜索关键词
 		return
 	}
 
 	lowerQuery := strings.ToLower(query)
+	m.searchQuery = lowerQuery // 保存搜索关键词用于高亮
 	m.searchMatches = nil
 	m.currentMatch = 0
 
@@ -843,31 +1157,52 @@ func (m *Model) jumpToQuery(query string) {
 		return
 	}
 
-	// 大文件模式：在整个文件中搜索（需要读取所有行）
+	// 大文件模式：优先使用ripgrep快速搜索
 	if m.usesChunked && m.chunkedReader != nil {
-		// 为了搜索功能，我们需要扫描整个文件
-		// 这可能比较耗时，但对于搜索功能是必要的
-		totalLines := m.totalLines
-		batchSize := 1000 // 每次读取1000行
+		var filePath string
+		if m.filePath != "" {
+			filePath = m.filePath
+		} else if m.history != nil {
+			filePath = m.history.LogFilePath
+		}
 
-		for start := 0; start < totalLines; start += batchSize {
-			end := start + batchSize - 1
-			if end >= totalLines {
-				end = totalLines - 1
-			}
+		// 尝试使用ripgrep
+		if filePath != "" && reader.RipgrepAvailable() {
+			matches, err := reader.RipgrepSearch(filePath, query)
+			if err == nil {
+				m.searchMatches = matches
 
-			lines, err := m.chunkedReader.ReadLines(start, end)
-			if err != nil {
-				m.statusMsg = fmt.Sprintf("搜索出错: %v", err)
+				if len(m.searchMatches) > 0 {
+					// 找到从当前位置开始的第一个匹配
+					currentOffset := m.viewport.YOffset
+					for i, lineIdx := range m.searchMatches {
+						if lineIdx >= currentOffset {
+							m.currentMatch = i
+							m.viewport.SetYOffset(lineIdx)
+							m.statusMsg = fmt.Sprintf("找到 %d 个匹配，当前 %d/%d (ripgrep)", len(m.searchMatches), i+1, len(m.searchMatches))
+							return
+						}
+					}
+					// 如果所有匹配都在当前位置之前，跳转到第一个匹配
+					m.currentMatch = 0
+					m.viewport.SetYOffset(m.searchMatches[0])
+					m.statusMsg = fmt.Sprintf("找到 %d 个匹配，当前 1/%d (ripgrep)", len(m.searchMatches), len(m.searchMatches))
+				} else {
+					m.statusMsg = "未找到匹配 (ripgrep)"
+				}
 				return
 			}
-
-			for i, line := range lines {
-				if strings.Contains(strings.ToLower(line), lowerQuery) {
-					m.searchMatches = append(m.searchMatches, start+i)
-				}
-			}
+			// ripgrep失败，继续使用fallback方法
 		}
+
+		// Fallback: 使用原有的扫描方法
+		matches, err := reader.FallbackSearch(m.chunkedReader, query)
+		if err != nil {
+			m.statusMsg = fmt.Sprintf("搜索出错: %v", err)
+			return
+		}
+
+		m.searchMatches = matches
 
 		if len(m.searchMatches) > 0 {
 			// 找到从当前位置开始的第一个匹配
@@ -876,11 +1211,6 @@ func (m *Model) jumpToQuery(query string) {
 				if lineIdx >= currentOffset {
 					m.currentMatch = i
 					m.viewport.SetYOffset(lineIdx)
-					// 需要加载包含该匹配行的内容
-					cmd := m.loadVisibleLinesCmd()
-					if cmd != nil {
-						// 这里无法直接执行cmd，但会在下一次Update中触发加载
-					}
 					m.statusMsg = fmt.Sprintf("找到 %d 个匹配，当前 %d/%d", len(m.searchMatches), i+1, len(m.searchMatches))
 					return
 				}

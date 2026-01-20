@@ -11,9 +11,9 @@ import (
 	"syscall"
 
 	"github.com/aliancn/logcmd/internal/config"
-	"github.com/aliancn/logcmd/internal/logger"
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/persistence"
+	"github.com/aliancn/logcmd/internal/services/execution"
 	"github.com/aliancn/logcmd/internal/tasks"
 	"github.com/aliancn/logcmd/internal/tasks/operations"
 	"github.com/spf13/cobra"
@@ -240,10 +240,14 @@ func runTaskWorker(idArg string) (retErr error) {
 		cfg.LogDir = task.LogDir
 	}
 
+	reg := services.Registry()
+	repo := persistence.NewRunRepository(reg)
+	statsUpdater := persistence.NewStatsUpdater(reg)
+
+	runner := execution.NewRunner(repo, statsUpdater)
+
 	// 预先生成并记录日志路径，以便 tail 命令可以立即查看
-	cfg.Command = task.Command
-	cfg.CommandArgs = task.CommandArgs
-	preLogPath, err := cfg.GetLogFilePath()
+	preLogPath, err := runner.PrepareLogPath(cfg, task.Command, task.CommandArgs)
 	if err != nil {
 		return fmt.Errorf("生成日志路径失败: %w", err)
 	}
@@ -251,21 +255,12 @@ func runTaskWorker(idArg string) (retErr error) {
 		fmt.Fprintf(os.Stderr, "警告: 更新日志路径失败: %v\n", err)
 	}
 
-	reg := services.Registry()
-	repo := persistence.NewRunRepository(reg)
-	statsUpdater := persistence.NewStatsUpdater(reg)
-
-	log, err := logger.New(cfg, repo, statsUpdater)
-	if err != nil {
-		return fmt.Errorf("创建日志记录器失败: %w", err)
-	}
-	log.SetLogPath(preLogPath)
-	defer log.Close() // 确保任务的异步持久化完成
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	result, path, runErr := log.Run(ctx, task.Command, task.CommandArgs...)
+	result, path, runErr := runner.Execute(ctx, cfg, task.Command, task.CommandArgs, execution.Options{
+		LogPathOverride: preLogPath,
+	})
 	logPath = path
 	if result != nil {
 		exitCode = result.ExitCode

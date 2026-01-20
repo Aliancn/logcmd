@@ -1,14 +1,16 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/aliancn/logcmd/internal/cliutil"
+	"github.com/aliancn/logcmd/internal/history"
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/template"
+	runewidth "github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
 )
 
@@ -150,44 +152,11 @@ func formatProjectRow(row projectRow, widths columnWidths) string {
 }
 
 func padRight(text string, width int) string {
-	padding := width - displayWidth(text)
+	padding := width - runewidth.StringWidth(text)
 	if padding <= 0 {
 		return text
 	}
 	return text + strings.Repeat(" ", padding)
-}
-
-func displayWidth(value string) int {
-	width := 0
-	for _, r := range value {
-		width += runeDisplayWidth(r)
-	}
-	return width
-}
-
-func runeDisplayWidth(r rune) int {
-	if r == 0 {
-		return 0
-	}
-	if r < 0x1100 {
-		return 1
-	}
-	switch {
-	case r >= 0x1100 && r <= 0x115f,
-		r == 0x2329 || r == 0x232a,
-		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f,
-		r >= 0xac00 && r <= 0xd7a3,
-		r >= 0xf900 && r <= 0xfaff,
-		r >= 0xfe10 && r <= 0xfe19,
-		r >= 0xfe30 && r <= 0xfe6f,
-		r >= 0xff00 && r <= 0xff60,
-		r >= 0xffe0 && r <= 0xffe6,
-		r >= 0x20000 && r <= 0x2fffd,
-		r >= 0x30000 && r <= 0x3fffd:
-		return 2
-	default:
-		return 1
-	}
 }
 
 func baseProjectColumnWidths() columnWidths {
@@ -223,13 +192,13 @@ type columnWidths struct {
 }
 
 func (w *columnWidths) update(row projectRow) {
-	w.ID = maxInt(w.ID, displayWidth(row.ID))
-	w.Name = maxInt(w.Name, displayWidth(row.Name))
-	w.Path = maxInt(w.Path, displayWidth(row.Path))
-	w.LastRun = maxInt(w.LastRun, displayWidth(row.LastRun))
-	w.SuccessRate = maxInt(w.SuccessRate, displayWidth(row.SuccessRate))
-	w.TotalCommands = maxInt(w.TotalCommands, displayWidth(row.TotalCommands))
-	w.Exists = maxInt(w.Exists, displayWidth(row.Exists))
+	w.ID = maxInt(w.ID, runewidth.StringWidth(row.ID))
+	w.Name = maxInt(w.Name, runewidth.StringWidth(row.Name))
+	w.Path = maxInt(w.Path, runewidth.StringWidth(row.Path))
+	w.LastRun = maxInt(w.LastRun, runewidth.StringWidth(row.LastRun))
+	w.SuccessRate = maxInt(w.SuccessRate, runewidth.StringWidth(row.SuccessRate))
+	w.TotalCommands = maxInt(w.TotalCommands, runewidth.StringWidth(row.TotalCommands))
+	w.Exists = maxInt(w.Exists, runewidth.StringWidth(row.Exists))
 }
 
 func (w columnWidths) total() int {
@@ -295,11 +264,16 @@ func cleanProjects() error {
 	}
 
 	if !projectCleanForce {
-		fmt.Print("确认删除以上项目? [yes/N]: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		normalized := strings.ToLower(strings.TrimSpace(input))
-		if normalized != "yes" && normalized != "y" && normalized != "确认" {
+		confirmed, err := cliutil.Confirm(cliutil.ConfirmationPrompt{
+			Message:       "确认删除以上项目? [yes/N]: ",
+			AcceptedWords: []string{"yes", "y", "确认"},
+			RejectedWords: []string{"n", "no"},
+			DefaultYes:    false,
+		})
+		if err != nil {
+			return fmt.Errorf("读取用户输入失败: %w", err)
+		}
+		if !confirmed {
 			fmt.Println("清理操作已取消")
 			return nil
 		}
@@ -314,7 +288,11 @@ func cleanProjects() error {
 }
 
 func runProjectClean() error {
-	if projectCleanDays <= 0 && projectCleanKeep <= 0 {
+	policy := history.RetentionPolicy{
+		MaxAgeDays:   projectCleanDays,
+		MaxKeepCount: projectCleanKeep,
+	}
+	if policy.IsZero() {
 		return fmt.Errorf("请指定清理条件: --days 或 --keep")
 	}
 
@@ -334,25 +312,23 @@ func runProjectClean() error {
 		if projectCleanKeep > 0 {
 			fmt.Printf("- 仅保留最近 %d 条记录\n", projectCleanKeep)
 		}
-		fmt.Print("确认执行? [y/N]: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(input)) != "y" {
+		confirmed, err := cliutil.Confirm(cliutil.ConfirmationPrompt{
+			Message:       "确认执行? [y/N]: ",
+			AcceptedWords: []string{"y", "yes", "确认"},
+			RejectedWords: []string{"n", "no"},
+			DefaultYes:    false,
+		})
+		if err != nil {
+			return fmt.Errorf("读取用户输入失败: %w", err)
+		}
+		if !confirmed {
 			fmt.Println("操作已取消")
 			return nil
 		}
 	}
 
-	if projectCleanDays > 0 {
-		if err := histMgr.DeleteOldRecords(projectCleanDays); err != nil {
-			return err
-		}
-	}
-
-	if projectCleanKeep > 0 {
-		if err := histMgr.DeleteExcessRecords(projectCleanKeep); err != nil {
-			return err
-		}
+	if err := histMgr.ApplyRetention(policy); err != nil {
+		return err
 	}
 
 	return nil
@@ -395,7 +371,6 @@ func deleteProject(target string) error {
 }
 
 func confirmProjectDeletion(project *model.Project) (bool, error) {
-	reader := bufio.NewReader(os.Stdin)
 	displayName := project.Name
 	if strings.TrimSpace(displayName) == "" {
 		displayName = template.GetProjectName(project.Path)
@@ -403,12 +378,11 @@ func confirmProjectDeletion(project *model.Project) (bool, error) {
 
 	fmt.Printf("⚠️ 即将删除项目 ID=%d 名称=\"%s\"\n", project.ID, displayName)
 	fmt.Printf("日志目录: %s\n", project.Path)
-	fmt.Print("请输入 yes/确认 继续删除，其他输入取消: ")
 
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return false, err
-	}
-	normalized := strings.ToLower(strings.TrimSpace(input))
-	return normalized == "yes" || normalized == "确认" || normalized == "y", nil
+	return cliutil.Confirm(cliutil.ConfirmationPrompt{
+		Message:       "请输入 yes/确认 继续删除，其他输入取消: ",
+		AcceptedWords: []string{"yes", "确认", "y"},
+		RejectedWords: []string{"n", "no"},
+		DefaultYes:    false,
+	})
 }

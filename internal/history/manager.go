@@ -10,6 +10,17 @@ import (
 	"github.com/aliancn/logcmd/internal/model"
 )
 
+// RetentionPolicy 描述日志保留策略。
+type RetentionPolicy struct {
+	MaxAgeDays   int // 删除多少天之前的记录
+	MaxKeepCount int // 仅保留最近多少条
+}
+
+// IsZero 判断策略是否为空。
+func (p RetentionPolicy) IsZero() bool {
+	return p.MaxAgeDays <= 0 && p.MaxKeepCount <= 0
+}
+
 const (
 	sqlRecordHistory = `
 		INSERT INTO command_history (
@@ -426,6 +437,27 @@ func (m *Manager) DeleteExcessRecords(limit int) error {
 	rowsAffected, _ := result.RowsAffected()
 	fmt.Printf("已清理 %d 条多余记录，删除 %d 个日志文件\n", rowsAffected, deletedFiles)
 
+	return nil
+}
+
+// ApplyRetention 根据策略执行日志保留逻辑。
+func (m *Manager) ApplyRetention(policy RetentionPolicy) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("历史记录管理器未初始化")
+	}
+	if policy.IsZero() {
+		return nil
+	}
+	if policy.MaxAgeDays > 0 {
+		if err := m.DeleteOldRecords(policy.MaxAgeDays); err != nil {
+			return err
+		}
+	}
+	if policy.MaxKeepCount > 0 {
+		if err := m.DeleteExcessRecords(policy.MaxKeepCount); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -12,9 +12,10 @@ import (
 	"syscall"
 
 	"github.com/aliancn/logcmd/internal/config"
-	"github.com/aliancn/logcmd/internal/logger"
+	"github.com/aliancn/logcmd/internal/history"
 	"github.com/aliancn/logcmd/internal/model"
 	"github.com/aliancn/logcmd/internal/persistence"
+	"github.com/aliancn/logcmd/internal/services/execution"
 	"github.com/spf13/cobra"
 )
 
@@ -62,37 +63,30 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	repo := persistence.NewRunRepository(reg)
 	statsUpdater := persistence.NewStatsUpdater(reg)
 
-	// 自动清理 (Auto-Cleaning)
+	policy := history.RetentionPolicy{
+		MaxAgeDays:   cfg.MaxRetentionDays,
+		MaxKeepCount: cfg.MaxRetentionCount,
+	}
 	var cleanWg sync.WaitGroup
-	if cfg.MaxRetentionDays > 0 || cfg.MaxRetentionCount > 0 {
+	if !policy.IsZero() {
 		cleanWg.Add(1)
 		go func() {
 			defer cleanWg.Done()
 			histMgr := services.HistoryManager()
-			if cfg.MaxRetentionDays > 0 {
-				if err := histMgr.DeleteOldRecords(cfg.MaxRetentionDays); err != nil {
-					// 仅在调试模式下打印错误，避免干扰用户输出
-					// fmt.Fprintf(os.Stderr, "自动清理失败 (Days): %v\n", err)
-				}
+			if histMgr == nil {
+				return
 			}
-			if cfg.MaxRetentionCount > 0 {
-				if err := histMgr.DeleteExcessRecords(cfg.MaxRetentionCount); err != nil {
-					// fmt.Fprintf(os.Stderr, "自动清理失败 (Count): %v\n", err)
-				}
+			if err := histMgr.ApplyRetention(policy); err != nil {
+				// 默认静默失败，避免影响命令输出
 			}
 		}()
 	}
 
-	log, err := logger.New(cfg, repo, statsUpdater)
-	if err != nil {
-		return fmt.Errorf("创建日志记录器失败: %w", err)
-	}
-	defer log.Close() // 确保异步持久化完成
-
+	runner := execution.NewRunner(repo, statsUpdater)
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	_, _, runErr := log.Run(ctx, args[0], args[1:]...)
+	_, _, runErr := runner.Execute(ctx, cfg, args[0], args[1:], execution.Options{})
 
 	// 等待清理完成
 	cleanWg.Wait()

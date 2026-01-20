@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aliancn/logcmd/internal/cliutil"
-	"github.com/aliancn/logcmd/internal/history"
-	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/template"
+	"github.com/aliancn/logcmd/internal/application/cliutil"
+	"github.com/aliancn/logcmd/internal/domain/model"
+	"github.com/aliancn/logcmd/internal/platform/history"
+	"github.com/aliancn/logcmd/internal/platform/template"
 	runewidth "github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
 )

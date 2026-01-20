@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 
-	"github.com/aliancn/logcmd/internal/ui"
+	"github.com/aliancn/logcmd/internal/presentation/ui"
 	"github.com/spf13/cobra"
 )
 

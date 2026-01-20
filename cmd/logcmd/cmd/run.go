@@ -11,11 +11,11 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/aliancn/logcmd/internal/config"
-	"github.com/aliancn/logcmd/internal/history"
-	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/persistence"
-	"github.com/aliancn/logcmd/internal/services/execution"
+	"github.com/aliancn/logcmd/internal/application/execution"
+	"github.com/aliancn/logcmd/internal/domain/config"
+	"github.com/aliancn/logcmd/internal/domain/model"
+	"github.com/aliancn/logcmd/internal/platform/history"
+	"github.com/aliancn/logcmd/internal/platform/persistence"
 	"github.com/spf13/cobra"
 )
 

@@ -10,12 +10,12 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/aliancn/logcmd/internal/config"
-	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/persistence"
-	"github.com/aliancn/logcmd/internal/services/execution"
-	"github.com/aliancn/logcmd/internal/tasks"
-	"github.com/aliancn/logcmd/internal/tasks/operations"
+	"github.com/aliancn/logcmd/internal/application/execution"
+	"github.com/aliancn/logcmd/internal/domain/config"
+	"github.com/aliancn/logcmd/internal/domain/model"
+	"github.com/aliancn/logcmd/internal/platform/persistence"
+	"github.com/aliancn/logcmd/internal/platform/tasks"
+	"github.com/aliancn/logcmd/internal/platform/tasks/operations"
 	"github.com/spf13/cobra"
 )
 

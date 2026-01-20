@@ -8,8 +8,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/aliancn/logcmd/internal/config"
-	"github.com/aliancn/logcmd/internal/template"
+	"github.com/aliancn/logcmd/internal/domain/config"
+	"github.com/aliancn/logcmd/internal/platform/template"
 	"github.com/spf13/cobra"
 )
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/stats"
+	"github.com/aliancn/logcmd/internal/platform/stats"
 )
 
 func TestNew(t *testing.T) {

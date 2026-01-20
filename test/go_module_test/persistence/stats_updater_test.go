@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/persistence"
+	"github.com/aliancn/logcmd/internal/platform/persistence"
 )
 
 func TestNewStatsUpdaterRequiresRegistry(t *testing.T) {

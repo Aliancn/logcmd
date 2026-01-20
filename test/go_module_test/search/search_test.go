@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/search"
+	"github.com/aliancn/logcmd/internal/platform/search"
 )
 
 func collectResults(t *testing.T, searcher *search.Searcher, ctx context.Context) ([]*search.SearchResult, error) {

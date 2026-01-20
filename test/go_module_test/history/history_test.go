@@ -8,9 +8,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/aliancn/logcmd/internal/history"
-	"github.com/aliancn/logcmd/internal/migration"
-	"github.com/aliancn/logcmd/internal/model"
+	"github.com/aliancn/logcmd/internal/platform/history"
+	"github.com/aliancn/logcmd/internal/platform/migration"
+	"github.com/aliancn/logcmd/internal/domain/model"
 )
 
 // setupTestDB 创建测试数据库

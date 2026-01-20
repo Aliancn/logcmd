@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/registry"
-	"github.com/aliancn/logcmd/internal/services"
-	"github.com/aliancn/logcmd/internal/stats"
+	"github.com/aliancn/logcmd/internal/application/services"
+	"github.com/aliancn/logcmd/internal/domain/model"
+	"github.com/aliancn/logcmd/internal/platform/registry"
+	"github.com/aliancn/logcmd/internal/platform/stats"
 )
 
 func TestStatsServiceStatsForPathWithoutRegistry(t *testing.T) {

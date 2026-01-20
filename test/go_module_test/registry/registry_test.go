@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/registry"
+	"github.com/aliancn/logcmd/internal/platform/registry"
 )
 
 // setupTestRegistry 创建测试用的 Registry 实例

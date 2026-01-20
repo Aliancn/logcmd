@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/model"
+	"github.com/aliancn/logcmd/internal/domain/model"
 )
 
 func TestCommandHistory_BeforeSave(t *testing.T) {

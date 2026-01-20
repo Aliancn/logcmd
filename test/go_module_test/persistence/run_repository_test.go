@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/executor"
-	"github.com/aliancn/logcmd/internal/persistence"
+	"github.com/aliancn/logcmd/internal/platform/executor"
+	"github.com/aliancn/logcmd/internal/platform/persistence"
 )
 
 func TestNewRunRepositoryRequiresRegistry(t *testing.T) {

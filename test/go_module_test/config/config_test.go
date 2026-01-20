@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/config"
-	"github.com/aliancn/logcmd/internal/template"
+	"github.com/aliancn/logcmd/internal/domain/config"
+	"github.com/aliancn/logcmd/internal/platform/template"
 )
 
 func TestDefaultConfig(t *testing.T) {

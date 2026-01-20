@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/template"
+	"github.com/aliancn/logcmd/internal/platform/template"
 )
 
 func TestDefaultTemplate(t *testing.T) {

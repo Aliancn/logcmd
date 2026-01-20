@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/executor"
+	"github.com/aliancn/logcmd/internal/platform/executor"
 )
 
 func newTestExecutor(logFile io.Writer) *executor.Executor {

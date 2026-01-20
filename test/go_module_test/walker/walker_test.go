@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliancn/logcmd/internal/walker"
+	"github.com/aliancn/logcmd/internal/platform/walker"
 )
 
 func TestNewWalkerValidatesRoot(t *testing.T) {

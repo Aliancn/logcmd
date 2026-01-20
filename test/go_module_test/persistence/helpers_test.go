@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/registry"
+	"github.com/aliancn/logcmd/internal/domain/model"
+	"github.com/aliancn/logcmd/internal/platform/registry"
 )
 
 func newTestRegistry(t *testing.T) *registry.Registry {

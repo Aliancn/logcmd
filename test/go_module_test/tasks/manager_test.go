@@ -9,9 +9,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/aliancn/logcmd/internal/migration"
-	"github.com/aliancn/logcmd/internal/model"
-	"github.com/aliancn/logcmd/internal/tasks"
+	"github.com/aliancn/logcmd/internal/platform/migration"
+	"github.com/aliancn/logcmd/internal/domain/model"
+	"github.com/aliancn/logcmd/internal/platform/tasks"
 )
 
 func setupTaskManager(t *testing.T) (*tasks.Manager, *sql.DB) {

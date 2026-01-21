@@ -43,7 +43,7 @@ test_tail_static() {
 
     local task_id="$1"
     local output
-    output=$(run_logcmd tail -n 10 "$task_id")
+    output=$(run_logcmd task tail -n 10 "$task_id")
     local line_count=$(echo "$output" | wc -l | tr -d ' ')
 
     TESTS_RUN=$((TESTS_RUN + 1))
@@ -69,7 +69,7 @@ test_tail_follow() {
     local task_id="$1"
     local temp_file="tail_follow.out"
 
-    run_logcmd tail -f "$task_id" >"$temp_file" &
+    run_logcmd task tail -f "$task_id" >"$temp_file" &
     local tail_pid=$!
 
     sleep 2
